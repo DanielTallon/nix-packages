@@ -15,13 +15,13 @@
 
 stdenv.mkDerivation (finalAttrs: {
   pname = "lgl-papercutter";
-  version = "0.0.0"; # replace with the real version
+  version = "0.3.0";
 
   src = fetchFromGitHub {
     owner = "linuxgamerlife";
     repo = "lgl-papercutter";
-    rev = "REPLACE_ME";
-    hash = "REPLACE_ME"; # nix will tell you the right value on first build attempt
+    rev = "v0.3.0";
+    hash = "sha256-KaIGuuXEKQzJQhX2s6qY7PJukcKLgUsshX/e+tVxPXc="; # nix will tell you the right value on first build attempt
   };
 
   nativeBuildInputs = [
