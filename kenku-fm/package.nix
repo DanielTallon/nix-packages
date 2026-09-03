@@ -1,41 +1,51 @@
-{ lib
-, stdenv
-, fetchurl
-, appimageTools
-, ...
-}:
+{ lib, stdenv, dpkg, autoPatchelfHook, wrapGAppsHook3, fetchurl, gtk3, glib, libdrm, libGL, alsa-lib, atk, pango, cairo, gdk-pixbuf, cups, dbus, expat, fontconfig, freetype, fribidi, harfbuzz, libX11, libXcomposite, libXcursor, libXdamage, libXext, libXfixes, libXi, libXinerama, libXrandr, libXrender, libXtst, libxcb, libxkbcommon, mesa, nspr, nss, at-spi2-atk, at-spi2-core, libglvnd, libsm, libice, ...}:
 
-# NOTE: this is a placeholder. Your real derivation currently lives in your
-# dotfiles at modules/kenku-fm/_default.nix, built via `pkgs-stable.callPackage`
-# — port that logic in here.
-#
-# Worth checking as you port it over:
-#   1. If Kenku FM ships as an AppImage upstream, `appimageTools.wrapType2`
-#      (or `wrapType1`) is almost certainly what your original derivation
-#      uses — carry that over rather than a plain mkDerivation.
-#   2. `src` — swap any local path for a `fetchurl` pinned to a specific
-#      upstream release + hash, so it's not tied to anything on your machine.
-#   3. You pinned this against `nixpkgs-stable` (nixos-26.05) in your dotfiles
-#      specifically for Kenku FM's build — this repo's flake.nix already pins
-#      nixpkgs to nixos-26.05 for the same reason, so that constraint should
-#      carry over for free. If the real reason was narrower (e.g. one specific
-#      dependency's version), double check it still applies here.
+# Ported from the real dotfiles derivation (modules/kenku-fm/default.nix).
+# Kenku FM ships upstream as a .deb, not an AppImage — this extracts it with
+# dpkg-deb and relinks it against nixpkgs libs via autoPatchelfHook, same as
+# the version that's been running in your dotfiles.
 
-appimageTools.wrapType2 rec {
+stdenv.mkDerivation rec {
   pname = "kenku-fm";
-  version = "0.0.0"; # replace with the real version
+  version = "1.5.5"; # bump alongside url/sha256 when upstream releases a new version
 
   src = fetchurl {
-    url = "REPLACE_ME"; # upstream AppImage release URL
-    hash = "REPLACE_ME"; # nix will tell you the right value on first build attempt
+    url = "https://github.com/owlbear-rodeo/kenku-fm/releases/download/v${version}/kenku-fm_${version}_amd64.deb";
+    sha256 = "sha256-oDpDpeYVBXfE/teg/xmpfI142mIGeywpxVbEKhHcO28=";
   };
 
-  extraPkgs = pkgs: with pkgs; [ ]; # add any runtime deps the AppImage needs
+  nativeBuildInputs = [ dpkg autoPatchelfHook wrapGAppsHook3 ];
+
+  buildInputs = [
+    gtk3 glib libdrm libGL alsa-lib atk pango cairo gdk-pixbuf cups dbus
+    expat fontconfig freetype fribidi harfbuzz libX11 libXcomposite
+    libXcursor libXdamage libXext libXfixes libXi libXinerama libXrandr
+    libXrender libXtst libxcb libxkbcommon mesa nspr nss at-spi2-atk
+    at-spi2-core libglvnd libsm libice
+  ];
+
+  unpackPhase = "true";
+
+  installPhase = ''
+    mkdir -p $out/bin $out/lib $out/share
+    dpkg-deb --fsys-tarfile $src | tar -x --exclude='./usr/lib/kenku-fm/chrome-sandbox' -C $out
+    mv $out/usr/bin/* $out/bin/
+    mv $out/usr/lib/* $out/lib/
+    mv $out/usr/share/* $out/share/
+    rm -rf $out/usr
+  '';
+
+  postFixup = ''
+    wrapProgram $out/bin/kenku-fm \
+      --add-flags "--no-sandbox" \
+      --prefix XDG_DATA_DIRS : "$out/share" \
+      --set DEFAULT_BROWSER "brave"
+  '';
 
   meta = {
-    description = "Kenku FM";
-    homepage = "REPLACE_ME";
-    license = lib.licenses.unfree; # replace with the actual upstream license
+    description = "Offline-capable text-to-speech and voice changer for tabletop audio";
+    homepage = "https://www.kenku.fm/";
+    license = lib.licenses.unfree;
     platforms = [ "x86_64-linux" ];
     mainProgram = "kenku-fm";
   };

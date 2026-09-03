@@ -1,11 +1,4 @@
-{ lib
-, stdenv
-, fetchFromGitHub
-, cmake
-, qt6
-, imagemagick
-, ...
-}:
+{ lib, stdenv, fetchFromGitHub, cmake, qt6, imagemagick, ...}:
 
 # NOTE: this is a placeholder. You already have a working flake.nix/package.nix
 # for this at ~/Develop/lgl-papercutter — port the real `mkDerivation` call
@@ -25,7 +18,7 @@ stdenv.mkDerivation (finalAttrs: {
   version = "0.0.0"; # replace with the real version
 
   src = fetchFromGitHub {
-    owner = "REPLACE_ME";
+    owner = "linuxgamerlife";
     repo = "lgl-papercutter";
     rev = "REPLACE_ME";
     hash = "REPLACE_ME"; # nix will tell you the right value on first build attempt
@@ -43,9 +36,8 @@ stdenv.mkDerivation (finalAttrs: {
 
   meta = {
     description = "Qt6/ImageMagick wallpaper editor";
-    homepage = "REPLACE_ME";
-    license = lib.licenses.unfree; # replace with the actual upstream license
-    platforms = lib.platforms.linux;
+    homepage = "https://github.com/linuxgamerlife/lgl-papercutter";
+    license = lib.licenses.mit;
     mainProgram = "lgl-papercutter";
   };
 })
