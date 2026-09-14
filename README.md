@@ -52,7 +52,7 @@ upstream releases automatically — that's intentional, for reproducibility.
 To bump one:
 
 1. Update `version` (and `rev`, for `lgl-papercutter`) in the relevant
-   `package.nix`.
+   `lgl-papercutter.nix` or `kenku-fm.nix`.
 2. Set `hash`/`sha256` to a dummy value (`lib.fakeHash`, or any obviously
    wrong string).
 3. Run `nix build .#<name>`. It'll fail with a hash mismatch — copy the
@@ -65,9 +65,9 @@ To bump one:
 nix-packages/
 ├── flake.nix
 ├── lgl-papercutter/
-│   └── package.nix
+│   └── lgl-papercutter.nix
 └── kenku-fm/
-    └── package.nix
+    └── kenku-fm.nix
 ```
 
 ## License

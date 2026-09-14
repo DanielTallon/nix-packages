@@ -18,16 +18,16 @@
         # `nix run .#lgl-papercutter` / `nix profile install .#kenku-fm`
         # — each package is independent, installing one never pulls in the other.
         packages = {
-          lgl-papercutter = pkgs.callPackage ./lgl-papercutter/package.nix { };
-          kenku-fm = pkgs.callPackage ./kenku-fm/package.nix { };
+            lgl-papercutter = pkgs.callPackage ./lgl-papercutter/lgl-papercutter.nix { };
+            kenku-fm = pkgs.callPackage ./kenku-fm/kenku-fm.nix { };
         };
       }
     ) // {
       # Overlay-style consumption: add this to your own `pkgs` and both
       # packages become ordinary attributes (pkgs.lgl-papercutter, pkgs.kenku-fm).
       overlays.default = final: prev: {
-        lgl-papercutter = final.callPackage ./lgl-papercutter/package.nix { };
-        kenku-fm = final.callPackage ./kenku-fm/package.nix { };
+        lgl-papercutter = final.callPackage ./lgl-papercutter/lgl-papercutter.nix { };
+        kenku-fm = final.callPackage ./kenku-fm/kenku-fm.nix { };
       };
     };
 }
