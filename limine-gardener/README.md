@@ -1,14 +1,17 @@
 # Limine Gardener
 
-Pick a NixOS generation, then **pin** it to keep it bootable, or **prune**
-it from the profile — all from one scrollable list. Plus a rescue tool for
-when `/boot` fills up and a normal rebuild can't even run.
+Pick a NixOS generation, then **pin** it to keep it bootable, **prune** it
+from the profile, or **harvest** it to evict it from the boot menu and
+reclaim its `/boot` space immediately — all from one scrollable list. Plus
+a rescue tool for when `/boot` fills up and a normal rebuild can't even
+run.
 
 Two scripts under one command:
 
 - **`limine-gardener`** — browse your system generations and pin one to the
-  Limine boot menu (bypassing `maxGenerations` garbage collection), or
-  prune one from the profile, from a single screen.
+  Limine boot menu (bypassing `maxGenerations` garbage collection), prune
+  one from the profile, or harvest one (evict + reclaim its `/boot` space
+  on the spot), from a single screen.
 - **`limine-gardener rescue`** — diagnose and, if needed, fix a `/boot`
   partition that's full or close to it, by finding and safely removing
   files a normal rebuild can't reach because it doesn't have room to run.
@@ -37,7 +40,7 @@ and copies files into `/boot`.
 ### Usage
 
 ```bash
-# Interactively pick a generation. Enter pins it, 'd' prunes it.
+# Interactively pick a generation. Enter pins it, 'd' prunes it, 'h' harvests it.
 nix run github:DanielTallon/nix-packages#limine-gardener
 
 # Or run it directly:
@@ -63,6 +66,15 @@ prompted once, up front).
   to confirm. This **never** touches `/boot` or runs garbage collection; run
   those yourself afterward if you want the space back. It also refuses
   outright to prune the currently-booted generation, no override.
+- **`h`** on a generation **harvests** it: hands straight off to
+  `limine-gardener rescue --evict GEN --apply` for that generation, which
+  removes its entry from the Limine menu *and* deletes the `/boot` files
+  that entry alone was using — reclaiming the space immediately rather than
+  waiting on a later GC + rebuild. It inherits every guardrail `rescue`
+  already has: refuses the currently-booted generation, refuses to drop
+  below 2 kept generations, backs up `limine.conf` before touching it, and
+  needs typed confirmation. See [Rescue mode](#rescue-mode) below for
+  exactly what that confirmation flow looks like.
 - **`q`** or **Esc** cancels at any point; so does Ctrl-C.
 
 ### Wiring it into your flake

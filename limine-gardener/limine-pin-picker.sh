@@ -8,11 +8,20 @@
 # It never touches any other file in your config, never runs git, and
 # never triggers a rebuild — review the diff and rebuild the same way
 # you always do.
+#
+# The one exception is 'h' (harvest) at the generation list, which shells
+# out to the sibling limine-boot-rescue.sh --evict GEN --apply -- that
+# script owns all the real work (and all the guardrails/confirmation) for
+# actually evicting a generation from the boot menu and reclaiming /boot
+# space. Nothing here duplicates that logic.
 set -euo pipefail
 
 OUTPUT="limine-pins.json"
 ACTION="add"
 REMOVE_NAME=""
+
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+RESCUE_SCRIPT="$(dirname "$SELF")/limine-boot-rescue.sh"
 
 usage() {
   cat <<'EOF'
@@ -20,7 +29,8 @@ limine-pin-picker — browse NixOS generations and pin one to Limine
 
 Usage:
   limine-pin-picker                 Interactively pick a generation --
-                                     Enter to pin it, 'd' to prune it
+                                     Enter to pin it, 'd' to prune it,
+                                     'h' to harvest it
   limine-pin-picker --list          List currently pinned entries
   limine-pin-picker --remove NAME   Remove a pinned entry by name
   limine-pin-picker --output FILE   Use a different pins file (default: ./limine-pins.json)
@@ -33,6 +43,14 @@ Pruning only removes the generation from the system profile
 (nix-env --delete-generations) -- it does NOT touch /boot or run garbage
 collection. Run your usual GC + rebuild afterward to actually reclaim space.
 The currently-booted generation can never be pruned this way.
+
+Harvesting a generation runs 'limine-boot-rescue --evict GEN --apply' on it
+directly -- it removes the generation's menu entry from limine.conf *and*
+deletes the /boot files that entry orphans, immediately reclaiming that
+space (rather than waiting on a GC + rebuild). Same guardrails as running
+rescue by hand: refuses the currently-booted generation, refuses to drop
+below 2 kept generations, backs up limine.conf first, and requires typed
+confirmation.
 
 While picking: press 'q' or Esc to cancel at the generation list, 'q' at
 any follow-up prompt to abort, or Ctrl-C at any point. Nothing is written
@@ -186,7 +204,7 @@ done
 BODY=$(printf '%s\n' "${ROWS[@]}" | sort -t $'\t' -k1,1nr)
 
 HEADER_TEXT="NixOS Generations (${#ROWS[@]} total, ${BOOT_COUNT} in bootloader)"
-FOOTER_TEXT="  q/Esc:cancel   Enter:pin   d:prune   ↑↓:move   Type to filter  "
+FOOTER_TEXT="  q/Esc:cancel   Enter:pin   d:prune   h:harvest   ↑↓:move   Type to filter  "
 
 RAW=$(
   {
@@ -201,7 +219,7 @@ RAW=$(
       --border-label ' limine-pin-picker ' \
       --footer "$FOOTER_TEXT" \
       --bind 'q:abort' \
-      --expect=d
+      --expect=d,h
 ) || true
 
 KEY=$(head -n1 <<<"$RAW")
@@ -247,6 +265,23 @@ if [[ "$KEY" == "d" ]]; then
   echo "Generation $GEN removed from the system profile."
   echo "Run garbage collection and rebuild to actually reclaim the space in /boot."
   exit 0
+fi
+
+if [[ "$KEY" == "h" ]]; then
+  echo
+  echo "Harvesting generation $GEN: evicting it from the Limine boot menu and"
+  echo "reclaiming the /boot space it alone was using."
+  echo "(This runs 'limine-boot-rescue --evict $GEN --apply' -- see its own"
+  echo "confirmation prompts below for exactly what that does.)"
+  echo
+
+  if [[ ! -x "$RESCUE_SCRIPT" ]]; then
+    echo "Error: expected limine-boot-rescue.sh alongside this script at:" >&2
+    echo "  $RESCUE_SCRIPT" >&2
+    exit 1
+  fi
+
+  exec "$RESCUE_SCRIPT" --evict "$GEN" --apply
 fi
 
 for f in kernel initrd init; do
