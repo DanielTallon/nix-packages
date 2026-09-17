@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# limine-gardener — pick, pin, or prune NixOS generations in your Limine
+# boot menu, or `rescue` a /boot partition that's full.
+#
+# Thin dispatcher: forwards to limine-pin-picker.sh by default, or to
+# limine-boot-rescue.sh when the first argument is 'rescue'. Resolves its
+# own installed location at runtime (rather than having Nix bake an
+# absolute path into generated text at build time), so there's nothing
+# here for Nix's string-interpolation rules to trip over.
+set -euo pipefail
+
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+LIBEXEC="$(cd "$(dirname "$SELF")/../libexec/limine-gardener" && pwd)"
+
+if [[ "${1:-}" == "rescue" ]]; then
+  shift
+  exec "$LIBEXEC/limine-boot-rescue.sh" "$@"
+else
+  exec "$LIBEXEC/limine-pin-picker.sh" "$@"
+fi
