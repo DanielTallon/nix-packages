@@ -209,24 +209,50 @@ fi
 # ---------------------------------------------------------------------------
 echo "== Phase 2 preview: evicting generation $EVICT_GEN from the boot menu =="
 
-CURRENT_SYSTEM=""
-[[ -e /run/current-system ]] && CURRENT_SYSTEM="$(readlink -f /run/current-system)"
-CURRENT_GEN=""
-if [[ -n "$CURRENT_SYSTEM" ]]; then
-  shopt -s nullglob
-  for link in /nix/var/nix/profiles/system-*-link; do
-    if [[ "$(readlink -f "$link")" == "$CURRENT_SYSTEM" ]]; then
-      CURRENT_GEN=$(basename "$link" | sed -E 's/system-([0-9]+)-link/\1/')
-      break
-    fi
-  done
-  shopt -u nullglob
+if [[ ! -L /run/current-system ]]; then
+  echo "Error: /run/current-system does not exist or is not a symlink." >&2
+  echo "This doesn't look like a normal NixOS boot environment." >&2
+  echo "Refusing to preview any eviction -- can't guarantee the current generation would be protected." >&2
+  exit 1
+fi
+CURRENT_SYSTEM="$(readlink -f /run/current-system)"
+
+shopt -s nullglob
+PROFILE_LINKS=(/nix/var/nix/profiles/system-*-link)
+shopt -u nullglob
+
+if [[ ${#PROFILE_LINKS[@]} -eq 0 ]]; then
+  echo "Error: no /nix/var/nix/profiles/system-*-link entries exist at all." >&2
+  echo "Refusing to preview any eviction -- there's nothing to prune yet." >&2
+  exit 1
 fi
 
+CURRENT_GEN=""
+for link in "${PROFILE_LINKS[@]}"; do
+  if [[ "$(readlink -f "$link")" == "$CURRENT_SYSTEM" ]]; then
+    CURRENT_GEN=$(basename "$link" | sed -E 's/system-([0-9]+)-link/\1/')
+    break
+  fi
+done
+
 if [[ -z "$CURRENT_GEN" ]]; then
-  echo "Error: could not determine the currently-booted generation number" >&2
-  echo "(no /run/current-system, or no matching /nix/var/nix/profiles/system-*-link)." >&2
-  echo "Refusing to preview any eviction -- can't guarantee the current generation would be protected." >&2
+  # A booted system with no matching profile link almost always means it was
+  # activated with `nixos-rebuild test` / `switch-to-configuration test`,
+  # which deliberately skips creating a profile generation (and skips the
+  # boot menu) -- so there's genuinely no generation number to protect.
+  echo "Error: could not determine the currently-booted generation number." >&2
+  echo "/run/current-system -> $CURRENT_SYSTEM" >&2
+  echo "...but no /nix/var/nix/profiles/system-*-link points at that same store path." >&2
+  echo >&2
+  echo "This usually means the running system was activated with 'nixos-rebuild test'" >&2
+  echo "(or 'switch-to-configuration test'), which skips creating a profile generation" >&2
+  echo "and skips updating the boot menu -- so there's genuinely nothing to protect it." >&2
+  echo >&2
+  echo "Fix: run 'nixos-rebuild switch' (or 'nh os switch') to register the current" >&2
+  echo "system as a real generation, then re-run limine-boot-rescue." >&2
+  echo >&2
+  echo "Refusing to preview any eviction -- can't guarantee the current generation" >&2
+  echo "would be protected." >&2
   exit 1
 fi
 
