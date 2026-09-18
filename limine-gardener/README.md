@@ -58,24 +58,33 @@ column marking which generations are currently referenced in your Limine
 menu (reading `/boot/limine/limine.conf`, which needs `sudo` — you'll be
 prompted once, up front).
 
+- **Tab** marks a generation for a multi-select action without leaving the
+  list; **Shift-Tab** unmarks one. Marking generations only matters for
+  `d`/`h` below — pinning always applies to a single generation, since each
+  pin needs its own name/title/comment.
 - **Enter** on a generation pins it: resolves its `kernel`/`initrd`/`init`
   store paths and `kernel-params` cmdline automatically, then asks for a
   short name, a menu title, and an optional comment.
-- **`d`** on a generation prunes it from the Nix profile
-  (`nix-env --delete-generations`) — after typing the generation number back
-  to confirm. This **never** touches `/boot` or runs garbage collection; run
-  those yourself afterward if you want the space back. It also refuses
-  outright to prune the currently-booted generation, no override.
-- **`h`** on a generation **harvests** it: hands straight off to
-  `limine-gardener rescue --evict GEN --apply` for that generation, which
-  removes its entry from the Limine menu *and* deletes the `/boot` files
-  that entry alone was using — reclaiming the space immediately rather than
-  waiting on a later GC + rebuild. It inherits every guardrail `rescue`
-  already has: refuses the currently-booted generation, refuses to drop
-  below 2 kept generations, backs up `limine.conf` before touching it, and
-  needs typed confirmation. See [Rescue mode](#rescue-mode) below for
+- **`d`** prunes the selected generation(s) from the Nix profile
+  (`nix-env --delete-generations`) — each one prompts you to type its
+  generation number back to confirm (or `q` to skip just that one). This
+  **never** touches `/boot` or runs garbage collection; run those yourself
+  afterward if you want the space back. It also refuses outright to prune
+  the currently-booted generation, no override.
+- **`h`** **harvests** the selected generation(s): for each one, hands off
+  to `limine-gardener rescue --evict GEN --apply`, which removes its entry
+  from the Limine menu *and* deletes the `/boot` files that entry alone was
+  using — reclaiming the space immediately rather than waiting on a later
+  GC + rebuild. It inherits every guardrail `rescue` already has: refuses
+  the currently-booted generation, refuses to drop below 2 kept
+  generations, backs up `limine.conf` before touching it, and needs typed
+  confirmation per generation. See [Rescue mode](#rescue-mode) below for
   exactly what that confirmation flow looks like.
-- **`q`** or **Esc** cancels at any point; so does Ctrl-C.
+- **`q`** or **Esc** at the list quits the tool entirely, as does Ctrl-C at
+  any point. `q` at a prompt or confirmation *within* a pin/prune/harvest
+  only cancels that one generation — you're dropped back into the
+  (refreshed) generation list rather than the whole tool exiting, so you
+  can immediately pick something else.
 
 ### Wiring it into your flake
 
