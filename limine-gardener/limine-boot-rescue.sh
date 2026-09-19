@@ -126,12 +126,14 @@ DISK_FILES="$(list_root_dir "$KERNELS_DIR")"
 
 TOTAL_ORPHAN_BYTES=0
 ORPHAN_COUNT=0
+ORPHAN_LIST=""
 while IFS=$'\t' read -r fname fsize; do
   [[ -n "$fname" ]] || continue
   if ! grep -qxF "$fname" <<<"$REFERENCED"; then
     printf '  %-70s %10d bytes\n' "$fname" "$fsize"
     TOTAL_ORPHAN_BYTES=$((TOTAL_ORPHAN_BYTES + fsize))
     ORPHAN_COUNT=$((ORPHAN_COUNT + 1))
+    ORPHAN_LIST+="$fname"$'\n'
   fi
 done <<<"$DISK_FILES"
 
@@ -192,11 +194,6 @@ if [[ -z "$EVICT_GEN" ]]; then
   confirm_exact "Type 'yes' to proceed, or 'q' to cancel: " "yes"
   echo
   echo "Deleting orphaned files..."
-  ORPHAN_LIST=""
-  while IFS=$'\t' read -r fname fsize; do
-    [[ -n "$fname" ]] || continue
-    grep -qxF "$fname" <<<"$REFERENCED" || ORPHAN_LIST+="$fname"$'\n'
-  done <<<"$DISK_FILES"
   delete_files "$ORPHAN_LIST"
   echo
   echo "Done. Re-run without --apply to confirm /boot space and remaining files."
@@ -344,10 +341,20 @@ fi
 # gate before the write, then delete the files that edit orphans.
 # ---------------------------------------------------------------------------
 echo "APPLY MODE: this will:"
-echo "  1. Back up $LIMINE_CONF"
-echo "  2. Remove the //Generation $EVICT_GEN block shown above from $LIMINE_CONF"
-echo "  3. Delete the $NEWLY_ORPHANED_COUNT newly-orphaned file(s) above ($((NEWLY_ORPHANED_BYTES / 1024 / 1024)) MiB)"
-echo "  4. Run: nix-env --delete-generations $EVICT_GEN --profile /nix/var/nix/profiles/system"
+STEP=1
+if [[ "$ORPHAN_COUNT" -gt 0 ]]; then
+  echo "  $STEP. Delete the $ORPHAN_COUNT Phase 1 orphaned file(s) reported above ($((TOTAL_ORPHAN_BYTES / 1024 / 1024)) MiB) -- done"
+  echo "     first, before touching $LIMINE_CONF, so there's room to write it even if"
+  echo "     /boot is currently completely full"
+  STEP=$((STEP + 1))
+fi
+echo "  $STEP. Back up $LIMINE_CONF"
+STEP=$((STEP + 1))
+echo "  $STEP. Remove the //Generation $EVICT_GEN block shown above from $LIMINE_CONF"
+STEP=$((STEP + 1))
+echo "  $STEP. Delete the $NEWLY_ORPHANED_COUNT newly-orphaned file(s) above ($((NEWLY_ORPHANED_BYTES / 1024 / 1024)) MiB)"
+STEP=$((STEP + 1))
+echo "  $STEP. Run: nix-env --delete-generations $EVICT_GEN --profile /nix/var/nix/profiles/system"
 echo
 echo "Generation $EVICT_GEN's boot menu entry cannot be recovered after this except from the backup."
 confirm_exact "Type the generation number ($EVICT_GEN) to confirm, or 'q' to cancel: " "$EVICT_GEN"
@@ -374,6 +381,12 @@ if [[ "$VALIDATION_FAILED" -eq 1 ]]; then
 fi
 echo "Validation passed ($NEW_KEPT_COUNT kept generations remain, current generation $CURRENT_GEN intact)."
 echo
+
+if [[ "$ORPHAN_COUNT" -gt 0 ]]; then
+  echo "Deleting Phase 1 orphaned files first (to guarantee room for the $LIMINE_CONF write, even on a completely full /boot)..."
+  delete_files "$ORPHAN_LIST"
+  echo
+fi
 
 BACKUP="${LIMINE_CONF}.bak-$(date +%Y%m%d%H%M%S)"
 TMPFILE=$(mktemp)

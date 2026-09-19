@@ -191,6 +191,13 @@ limine-gardener rescue --evict 166 --apply
   makes orphaned — accounting for content-hash deduplication, since
   consecutive generations often share identical kernel builds and only the
   files that are genuinely no longer used by anything get deleted.
+  `--evict N --apply` also deletes any Phase 1 orphans first, *before*
+  touching `limine.conf` — since writing the backup and the new config both
+  need a little free space themselves, deleting the zero-risk Phase 1
+  files first guarantees that room even when `/boot` is already completely
+  full (0 bytes free). This is what makes `h` (harvest) in the picker work
+  reliably on a fully-out-of-space `/boot` without a separate manual
+  `rescue --apply` afterward.
 
 ### Guardrails
 
