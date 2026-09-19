@@ -395,20 +395,36 @@ while true; do
     LINK="/nix/var/nix/profiles/system-${GEN}-link"
     TARGET=$(readlink -f "$LINK")
     echo "Selected generation $GEN -> $TARGET"
-    pin_generation "$GEN" "$LINK" "$TARGET"
+    # '|| true': pin_generation returns 1 on 'q' at any prompt (cancel, back
+    # to the picker). Called bare like this under `set -e`, a non-zero
+    # return would otherwise kill the whole script instead of just this
+    # attempt -- see the same note above harvest_generation's call below.
+    pin_generation "$GEN" "$LINK" "$TARGET" || true
     continue
   fi
 
   if [[ "$KEY" == "d" ]]; then
     for GEN in "${SELECTED_GENS[@]}"; do
-      prune_generation "$GEN"
+      # '|| true': prune_generation returns 1 on 'q', a mismatched typed
+      # confirmation, or refusing the current generation -- all meant as
+      # "skip this one, keep going," not "quit." Called bare under
+      # `set -e`, a non-zero return here would otherwise exit the whole
+      # script on the spot, before the loop (or the outer picker) ever
+      # gets a chance to continue.
+      prune_generation "$GEN" || true
     done
     continue
   fi
 
   if [[ "$KEY" == "h" ]]; then
     for GEN in "${SELECTED_GENS[@]}"; do
-      harvest_generation "$GEN"
+      # '|| true': harvest_generation returns 1 whenever the rescue script
+      # it shells out to exits non-zero -- 'q' at any of rescue's own
+      # confirmations, or one of rescue's own guardrail refusals. That's
+      # meant to abort just this harvest and return to the picker, but a
+      # bare non-zero return here would trip `set -e` and kill the whole
+      # tool instead.
+      harvest_generation "$GEN" || true
     done
     continue
   fi
