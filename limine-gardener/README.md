@@ -64,7 +64,11 @@ prompted once, up front).
   pin needs its own name/title/comment.
 - **Enter** on a generation pins it: resolves its `kernel`/`initrd`/`init`
   store paths and `kernel-params` cmdline automatically, then asks for a
-  short name, a menu title, and an optional comment.
+  short name, a menu title, and an optional comment. Once written, it asks
+  `Rebuild now with 'nh os boot . -- --impure'? [yes/N]` — type `yes` to
+  run it on the spot, or anything else (including just Enter) to skip and
+  get a printed reminder instead, since it's easy to forget `--impure` is
+  now required (see below).
 - **`d`** prunes the selected generation(s) from the Nix profile
   (`nix-env --delete-generations`) — each one prompts you to type its
   generation number back to confirm (or `q` to skip just that one). This
@@ -111,8 +115,9 @@ or `access to absolute path '...' is forbidden in pure evaluation mode`).
 There's no way around this with a code change — it's fundamental to what
 the feature does, not a bug in the module.
 
-**Every rebuild, for as long as `limine-pins.json` has any entries, needs
-`--impure`:**
+The picker offers to handle this for you right after a pin is written (see
+above) — but **every rebuild, for as long as `limine-pins.json` has any
+entries, needs `--impure`:**
 
 ```bash
 nh os switch . -- --impure

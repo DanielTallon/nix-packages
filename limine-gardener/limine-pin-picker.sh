@@ -205,6 +205,16 @@ pin_generation() {
   echo
   echo "Pinned generation $GEN as '$NAME' in $OUTPUT."
   echo "Review the diff, then rebuild normally."
+
+  local REBUILD_CONFIRM
+  read -rp "Rebuild now with 'nh os boot . -- --impure'? [yes/N]: " REBUILD_CONFIRM
+  if [[ "$REBUILD_CONFIRM" == "yes" ]]; then
+    nh os boot . -- --impure
+  else
+    echo
+    echo "⚠️  This repo now has an active pin — your next rebuild MUST include --impure, e.g.:"
+    echo "    nh os switch . -- --impure"
+  fi
 }
 
 prune_generation() {
