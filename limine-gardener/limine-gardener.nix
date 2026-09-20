@@ -3,7 +3,7 @@
 
 stdenvNoCC.mkDerivation {
   pname = "limine-gardener";
-  version = "1.2.0";
+  version = "1.3.0";
 
   src = ./.;
 
@@ -21,7 +21,7 @@ stdenvNoCC.mkDerivation {
   '';
 
   meta = with lib; {
-    description = "Pick, pin, harvest, or garbage-collect NixOS generations in your Limine boot menu, or rescue a full /boot partition";
+    description = "Pick, pin, prune, harvest, or garbage-collect NixOS generations in your Limine boot menu, or rescue a full /boot partition";
     platforms = platforms.linux;
     mainProgram = "limine-gardener";
   };
