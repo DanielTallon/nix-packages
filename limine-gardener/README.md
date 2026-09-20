@@ -1,17 +1,18 @@
 # Limine Gardener
 
-Pick a NixOS generation, then **pin** it to keep it bootable, **prune** it
-from the profile, or **harvest** it to evict it from the boot menu and
-reclaim its `/boot` space immediately — all from one scrollable list. Plus
-a rescue tool for when `/boot` fills up and a normal rebuild can't even
-run.
+Pick a NixOS generation, then **pin** it to keep it bootable, or **harvest**
+it to evict it from the boot menu and reclaim its `/boot` space immediately
+— plus a global **garbage-collect** action for orphaned `/boot` files and
+nix-shell/nix develop leftovers, and an in-place help panel — all from one
+scrollable list. Plus a rescue tool for when `/boot` fills up and a normal
+rebuild can't even run.
 
 Two scripts under one command:
 
 - **`limine-gardener`** — browse your system generations and pin one to the
-  Limine boot menu (bypassing `maxGenerations` garbage collection), prune
-  one from the profile, or harvest one (evict + reclaim its `/boot` space
-  on the spot), from a single screen.
+  Limine boot menu (bypassing `maxGenerations` garbage collection), harvest
+  one (evict + reclaim its `/boot` space on the spot), or garbage-collect
+  boot orphans and nix-shell/nix develop leftovers, from a single screen.
 - **`limine-gardener rescue`** — diagnose and, if needed, fix a `/boot`
   partition that's full or close to it, by finding and safely removing
   files a normal rebuild can't reach because it doesn't have room to run.
@@ -35,12 +36,12 @@ and copies files into `/boot`.
 
 ---
 
-## Picking, pinning, pruning
+## Picking, pinning, harvesting, garbage-collecting
 
 ### Usage
 
 ```bash
-# Interactively pick a generation. Enter pins it, 'd' prunes it, 'h' harvests it.
+# Interactively pick a generation. Enter pins it, 'h' harvests it, 'p' garbage-collects.
 nix run github:DanielTallon/nix-packages#limine-gardener
 
 # Or run it directly:
@@ -60,8 +61,8 @@ prompted once, up front).
 
 - **Tab** marks a generation for a multi-select action without leaving the
   list; **Shift-Tab** unmarks one. Marking generations only matters for
-  `d`/`h` below — pinning always applies to a single generation, since each
-  pin needs its own name/title/comment.
+  `h` below — pinning always applies to a single generation, since each pin
+  needs its own name/title/comment, and `p` ignores selection entirely.
 - **Enter** on a generation pins it: resolves its `kernel`/`initrd`/`init`
   store paths and `kernel-params` cmdline automatically, then asks for a
   short name, a menu title, and an optional comment. Once written, it asks
@@ -69,12 +70,6 @@ prompted once, up front).
   run it on the spot, or anything else (including just Enter) to skip and
   get a printed reminder instead, since it's easy to forget `--impure` is
   now required (see below).
-- **`d`** prunes the selected generation(s) from the Nix profile
-  (`nix-env --delete-generations`) — each one prompts you to type its
-  generation number back to confirm (or `q` to skip just that one). This
-  **never** touches `/boot` or runs garbage collection; run those yourself
-  afterward if you want the space back. It also refuses outright to prune
-  the currently-booted generation, no override.
 - **`h`** **harvests** the selected generation(s): for each one, hands off
   to `limine-gardener rescue --evict GEN --apply`, which removes its entry
   from the Limine menu *and* deletes the `/boot` files that entry alone was
@@ -84,11 +79,23 @@ prompted once, up front).
   generations, backs up `limine.conf` before touching it, and needs typed
   confirmation per generation. See [Rescue mode](#rescue-mode) below for
   exactly what that confirmation flow looks like.
+- **`p`** **garbage-collects** — a global action, independent of whatever's
+  highlighted or marked. It reports orphaned `/boot` files the same way
+  `limine-gardener rescue` does (Phase 1: files nothing in `limine.conf`
+  references), then reports dead Nix store paths (`nix-store --gc
+  --print-dead`) — the usual home of nix-shell/nix develop leftovers and
+  stray build results. One `[yes/N]` confirmation runs both cleanups for
+  real: the `/boot` orphans are deleted via `rescue --apply` (its own
+  guardrails and confirmation still apply), then `nix-collect-garbage`
+  runs. It never deletes a generation from the system profile and never
+  touches `limine.conf` directly — that's what `h` is for.
+- **`?`** toggles an in-place help panel listing all of the above, without
+  leaving the list.
 - **`q`** or **Esc** at the list quits the tool entirely, as does Ctrl-C at
-  any point. `q` at a prompt or confirmation *within* a pin/prune/harvest
-  only cancels that one generation — you're dropped back into the
-  (refreshed) generation list rather than the whole tool exiting, so you
-  can immediately pick something else.
+  any point. `q` at a prompt or confirmation *within* a pin/harvest/gc
+  only cancels that one action — you're dropped back into the (refreshed)
+  generation list rather than the whole tool exiting, so you can
+  immediately pick something else.
 
 ### Wiring it into your flake
 

@@ -9,11 +9,15 @@
 # never triggers a rebuild — review the diff and rebuild the same way
 # you always do.
 #
-# The one exception is 'h' (harvest) at the generation list, which shells
-# out to the sibling limine-boot-rescue.sh --evict GEN --apply -- that
-# script owns all the real work (and all the guardrails/confirmation) for
-# actually evicting a generation from the boot menu and reclaiming /boot
-# space. Nothing here duplicates that logic.
+# The exceptions are 'h' (harvest) and 'p' (garbage-collect) at the
+# generation list. 'h' shells out to the sibling limine-boot-rescue.sh
+# --evict GEN --apply -- that script owns all the real work (and all the
+# guardrails/confirmation) for actually evicting a generation from the boot
+# menu and reclaiming /boot space. 'p' shells out to the same script for
+# its zero-risk Phase 1 orphan report/cleanup, then runs plain Nix garbage
+# collection for anything left over from nix-shell/nix develop sessions or
+# stray build results. Neither touches the generation list itself or any
+# file this tool doesn't already document.
 set -euo pipefail
 
 OUTPUT="limine-pins.json"
@@ -28,9 +32,11 @@ usage() {
 limine-pin-picker — browse NixOS generations and pin one to Limine
 
 Usage:
-  limine-pin-picker                 Interactively pick generation(s) --
-                                     Enter to pin one, 'd' to prune, 'h' to
-                                     harvest (Tab to select several first)
+  limine-pin-picker                 Interactively pick a generation --
+                                     Enter to pin it, 'h' to harvest
+                                     (Tab to select several first), 'p' to
+                                     garbage-collect (no selection needed),
+                                     '?' to toggle this help
   limine-pin-picker --list          List currently pinned entries
   limine-pin-picker --remove NAME   Remove a pinned entry by name
   limine-pin-picker --output FILE   Use a different pins file (default: ./limine-pins.json)
@@ -39,15 +45,17 @@ Usage:
 The pins file is always fully rewritten (never patched in place) and kept
 sorted by name, so it stays clean and diffable in git.
 
-Tab-select multiple generations before pressing 'd' or 'h' to prune or
-harvest all of them in one go, each with its own confirmation. Pinning
-('Enter') always applies to exactly one generation at a time, since each
-pin needs its own name/title/comment.
+Tab-select multiple generations before pressing 'h' to harvest all of them
+in one go, each with its own confirmation. Pinning ('Enter') always applies
+to exactly one generation at a time, since each pin needs its own
+name/title/comment. 'p' ignores selection entirely -- it's a global cleanup,
+not a per-generation action.
 
-Pruning only removes the generation from the system profile
-(nix-env --delete-generations) -- it does NOT touch /boot or run garbage
-collection. Run your usual GC + rebuild afterward to actually reclaim space.
-The currently-booted generation can never be pruned this way.
+'p' garbage-collects leftovers that aren't tied to any one generation: it
+reports (then, with confirmation, deletes) orphaned /boot files via
+limine-boot-rescue, and runs plain Nix garbage collection for anything left
+over from nix-shell/nix develop sessions or stray build results. It never
+deletes a generation from the system profile and never touches limine.conf.
 
 Harvesting a generation runs 'limine-boot-rescue --evict GEN --apply' on it
 directly -- it removes the generation's menu entry from limine.conf *and*
@@ -58,10 +66,10 @@ below 2 kept generations, backs up limine.conf first, and requires typed
 confirmation.
 
 'q' or Esc at the generation list quits the tool entirely, as does Ctrl-C
-at any point. 'q' at a follow-up prompt or confirmation (pin, prune,
-harvest) only cancels that one generation and returns you to the list --
-nothing is written or pruned for it, but the tool keeps running so you can
-pick something else.
+at any point. 'q' at a follow-up prompt or confirmation (pin, harvest, gc)
+only cancels that one action and returns you to the list -- nothing is
+written or deleted for it, but the tool keeps running so you can pick
+something else.
 EOF
 }
 
@@ -135,6 +143,37 @@ fi
 
 require fzf
 LIMINE_CONF="/boot/limine/limine.conf"
+
+HELP_FILE=$(mktemp)
+trap 'rm -f "$HELP_FILE"' EXIT
+cat >"$HELP_FILE" <<'EOF'
+limine-pin-picker -- key reference
+
+  Enter    Pin the highlighted generation (asks for a short name, a menu
+           title, and an optional comment). One at a time only.
+
+  Tab      Mark the highlighted generation for a multi-select action
+           (h). Shift-Tab unmarks it.
+
+  h        Harvest the marked generation(s) -- evict from the Limine
+           boot menu AND delete the /boot files that entry alone was
+           using, reclaiming the space immediately. Refuses the
+           currently-booted generation and refuses to drop below 2 kept
+           generations. Typed confirmation required per generation.
+
+  p        Garbage-collect. Ignores selection entirely -- global cleanup,
+           not tied to any one generation. Reports (then, with
+           confirmation, deletes) orphaned /boot files, and runs plain
+           Nix garbage collection for nix-shell/nix develop leftovers and
+           stray build results. Never touches the system profile or
+           limine.conf.
+
+  ?        Toggle this help.
+
+  q / Esc  Quit the tool entirely (as does Ctrl-C, any time). 'q' at a
+           prompt or confirmation instead cancels just that one action
+           and returns you here.
+EOF
 
 # Prompts for one line of input. Prints to stdout via a result var. Returns 1
 # (without setting the result var) if the user types 'q'/'Q' -- callers treat
@@ -217,40 +256,48 @@ pin_generation() {
   fi
 }
 
-prune_generation() {
-  local GEN="$1"
-  local LINK="/nix/var/nix/profiles/system-${GEN}-link"
-  local TARGET CONFIRM
-  TARGET=$(readlink -f "$LINK")
-
-  if [[ -n "$CURRENT_SYSTEM" && "$TARGET" == "$CURRENT_SYSTEM" ]]; then
-    echo "Refusing to prune the currently booted generation ($GEN)." >&2
-    return 1
+gc_orphans_and_leftovers() {
+  local CONFIRM
+  # Global action -- not tied to whatever's selected in the list. Two parts:
+  # 1) boot orphans (delegated entirely to limine-boot-rescue's own Phase 1
+  #    report/apply, same as running it by hand with no --evict);
+  # 2) plain Nix GC for anything left over from nix-shell/nix develop
+  #    sessions or stray build results, which never touches a generation
+  #    or limine.conf at all -- just dead store paths.
+  echo
+  echo "== Boot orphans (files in /boot/limine/kernels/ referenced by nothing) =="
+  if [[ -x "$RESCUE_SCRIPT" ]]; then
+    "$RESCUE_SCRIPT" || true
+  else
+    echo "  (limine-boot-rescue.sh not found alongside this script -- skipping)" >&2
   fi
 
   echo
-  echo "This prunes generation $GEN from the system profile only"
-  echo "(nix-env --delete-generations). It does NOT touch /boot directly --"
-  echo "the space is only reclaimed after you run garbage collection and"
-  echo "rebuild (e.g. nix-collect-garbage && nh os switch)."
+  echo "== Nix store: dead paths (nix-shell/nix develop leftovers, stray build results, etc.) =="
+  require nix-store
+  nix-store --gc --print-dead || true
   echo
 
-  read -rp "Type the generation number (${GEN}) to confirm, or 'q' to skip this one: " CONFIRM
-  if [[ "$CONFIRM" == "q" || "$CONFIRM" == "Q" ]]; then
-    echo "Skipped pruning generation $GEN. Back to the picker."
+  read -rp "Proceed with cleanup (delete the boot orphans above, then run nix-collect-garbage)? [yes/N]: " CONFIRM
+  if [[ "$CONFIRM" != "yes" ]]; then
+    echo "Skipped. Nothing was deleted."
     return 0
   fi
-  if [[ "$CONFIRM" != "$GEN" ]]; then
-    echo "Confirmation did not match ('$CONFIRM' != '$GEN'). Skipped pruning generation $GEN." >&2
-    return 1
+
+  if [[ -x "$RESCUE_SCRIPT" ]]; then
+    echo
+    echo "Deleting boot orphans (limine-boot-rescue --apply -- its own confirmation follows)..."
+    "$RESCUE_SCRIPT" --apply || echo "Note: boot-orphan cleanup was cancelled or found nothing to do -- continuing." >&2
   fi
 
-  echo "Pruning generation $GEN from the system profile..."
-  sudo nix-env --delete-generations "$GEN" --profile /nix/var/nix/profiles/system
+  echo
+  echo "Running nix-collect-garbage..."
+  require nix-collect-garbage
+  nix-collect-garbage
 
   echo
-  echo "Generation $GEN removed from the system profile."
-  echo "Run garbage collection and rebuild to actually reclaim the space in /boot."
+  echo "Done. This never touched the system profile or limine.conf -- generations"
+  echo "and pins are exactly as they were."
 }
 
 harvest_generation() {
@@ -362,7 +409,7 @@ while true; do
   BODY=$(printf '%s\n' "${ROWS[@]}" | sort -t $'\t' -k1,1nr)
 
   HEADER_TEXT="NixOS Generations (${#ROWS[@]} total, ${BOOT_COUNT} in bootloader)"
-  FOOTER_TEXT="  q/Esc:quit   Enter:pin   Tab:multi-select   d:prune   h:harvest   ↑↓:move   Type to filter  "
+  FOOTER_TEXT="  q/Esc:quit   Enter:pin   Tab:multi-select   h:harvest   p:gc   ?:help   ↑↓:move   Type to filter  "
 
   RAW=$(
     {
@@ -378,11 +425,21 @@ while true; do
         --footer "$FOOTER_TEXT" \
         --multi \
         --bind 'q:abort' \
-        --expect=d,h
+        --bind '?:toggle-preview' \
+        --preview "cat '$HELP_FILE'" \
+        --preview-window '~3,down,70%:hidden:wrap' \
+        --expect=p,h
   ) || true
 
   KEY=$(head -n1 <<<"$RAW")
   SELECTED=$(tail -n +2 <<<"$RAW")
+
+  if [[ "$KEY" == "p" ]]; then
+    # Global action -- deliberately doesn't require (or care about) a
+    # selection, since it isn't tied to any one generation.
+    gc_orphans_and_leftovers || true
+    continue
+  fi
 
   [[ -n "$SELECTED" ]] || {
     echo "No generation selected."
@@ -391,13 +448,13 @@ while true; do
 
   mapfile -t SELECTED_GENS < <(awk '{print $1}' <<<"$SELECTED")
 
-  if [[ "$KEY" != "d" && "$KEY" != "h" ]]; then
+  if [[ "$KEY" != "h" ]]; then
     # Enter -> pin. Pinning asks for a name/title/comment per generation, so
-    # it only makes sense one at a time -- multi-select is for 'd'/'h'.
+    # it only makes sense one at a time -- multi-select is for 'h'.
     if [[ ${#SELECTED_GENS[@]} -gt 1 ]]; then
       echo
       echo "Pinning only supports one generation at a time -- you selected ${#SELECTED_GENS[@]}." >&2
-      echo "Tab-select multiple generations for prune ('d') or harvest ('h') instead." >&2
+      echo "Tab-select multiple generations for harvest ('h') instead." >&2
       echo
       continue
     fi
@@ -410,19 +467,6 @@ while true; do
     # return would otherwise kill the whole script instead of just this
     # attempt -- see the same note above harvest_generation's call below.
     pin_generation "$GEN" "$LINK" "$TARGET" || true
-    continue
-  fi
-
-  if [[ "$KEY" == "d" ]]; then
-    for GEN in "${SELECTED_GENS[@]}"; do
-      # '|| true': prune_generation returns 1 on 'q', a mismatched typed
-      # confirmation, or refusing the current generation -- all meant as
-      # "skip this one, keep going," not "quit." Called bare under
-      # `set -e`, a non-zero return here would otherwise exit the whole
-      # script on the spot, before the loop (or the outer picker) ever
-      # gets a chance to continue.
-      prune_generation "$GEN" || true
-    done
     continue
   fi
 
