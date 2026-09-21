@@ -35,7 +35,12 @@ and copies files into `/boot`.
 The bootloader is auto-detected from what's on `/boot` (presence of
 `/boot/limine/limine.conf` vs. `/boot/loader/loader.conf`); pass
 `--bootloader limine` or `--bootloader systemd-boot` to either script to
-skip detection.
+skip detection. If **both** files exist — common right after switching
+bootloaders, since NixOS's installers don't clean up the previous
+loader's leftover files — detection picks whichever was modified more
+recently (only the bootloader actually in use gets its config rewritten
+on every rebuild) and prints a note saying so; `--bootloader` always
+overrides the guess.
 
 **Pinning is Limine-only for now.** It works by generating a Nix-level JSON
 file that `limine-manual-pins.nix` turns into a real Limine menu entry —
@@ -75,7 +80,8 @@ limine-gardener --output ~/.dotfiles/limine-pins.json
 # List what's currently pinned
 limine-gardener --list
 
-# Remove a pin by its name
+# Remove a pin by its name (or select its 📌 row in the interactive list
+# and press Enter instead)
 limine-gardener --remove gen-144
 
 # Skip bootloader auto-detection
@@ -90,9 +96,13 @@ you'll be prompted once, up front).
 
 - **Tab** marks a generation for a multi-select action without leaving the
   list; **Shift-Tab** unmarks one. Marking generations only matters for
-  `d`/`h` below — pinning always applies to a single generation, since each
-  pin needs its own name/title/comment, and `g` ignores selection entirely.
-- **Enter** on a generation pins it (**Limine only** — see
+  `d`/`h` below — pin/unpin always applies to a single row, and `g` ignores
+  selection entirely.
+- Pin rows (📌) are listed alongside generation rows, and stick around even
+  after their source generation is pruned/GC'd from the system profile —
+  pinning captures store paths directly for exactly that reason, so
+  there's always a row to unpin.
+- **Enter** on a generation row pins it (**Limine only** — see
   [Bootloader support](#bootloader-support) above; on systemd-boot this
   prints an explanation and does nothing else): resolves its
   `kernel`/`initrd`/`init` store paths and `kernel-params` cmdline
@@ -101,6 +111,10 @@ you'll be prompted once, up front).
   --impure'? [yes/N]` — type `yes` to run it on the spot, or anything else
   (including just Enter) to skip and get a printed reminder instead, since
   it's easy to forget `--impure` is now required (see below).
+- **Enter** on a pin row (📌) unpins it instead: removes it from
+  `limine-pins.json`, then offers to rebuild on the spot (`nh os switch .
+  -- --impure` if other pins remain, plain `nh os switch .` if that was the
+  last one) — same "type something else to skip" convention as pinning.
 - **`d`** and **`h`** are opposite ends of removing a generation, and each
   only works on the kind of generation the other doesn't — the `BOOT`
   column tells you which is which. Both work identically on Limine and

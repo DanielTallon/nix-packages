@@ -47,13 +47,13 @@ limine-pin-picker — browse NixOS generations, and pin one to Limine
 
 Usage:
   limine-pin-picker                 Interactively pick a generation --
-                                     Enter to pin it (Limine only), 'd' to
-                                     prune a non-bootloader generation, 'h'
-                                     to harvest a bootloader generation
-                                     (Tab to select several first for
-                                     'd'/'h'), 'g' to garbage-collect (no
-                                     selection needed), '?' to toggle this
-                                     help
+                                     Enter to pin it (Limine only) or, on a
+                                     pin row, to unpin it; 'd' to prune a
+                                     non-bootloader generation; 'h' to
+                                     harvest a bootloader generation (Tab
+                                     to select several first for 'd'/'h');
+                                     'g' to garbage-collect (no selection
+                                     needed); '?' to toggle this help
   limine-pin-picker --list          List currently pinned entries
   limine-pin-picker --remove NAME   Remove a pinned entry by name
   limine-pin-picker --output FILE   Use a different pins file (default: ./limine-pins.json)
@@ -71,10 +71,15 @@ The pins file is always fully rewritten (never patched in place) and kept
 sorted by name, so it stays clean and diffable in git.
 
 Tab-select multiple generations before pressing 'd' or 'h' to act on all of
-them in one go, each with its own confirmation. Pinning ('Enter') always
-applies to exactly one generation at a time, since each pin needs its own
-name/title/comment. 'g' ignores selection entirely -- it's a global
-cleanup, not a per-generation action.
+them in one go, each with its own confirmation. Enter (pin or unpin)
+always applies to exactly one row at a time. 'g' ignores selection
+entirely -- it's a global cleanup, not a per-generation action.
+
+Pin rows (📌) are listed alongside generation rows, independent of whether
+the pin's source generation still exists in the system profile -- a pin
+captures store paths directly and is meant to outlive the generation it
+was pinned from being pruned/GC'd, so it stays selectable (for unpinning
+via Enter) even then.
 
 'd' (prune) and 'h' (harvest) are opposite ends of removing a generation,
 and each only works on the kind of generation the other doesn't:
@@ -197,10 +202,12 @@ trap 'rm -f "$HELP_FILE"' EXIT
 cat >"$HELP_FILE" <<EOF
 limine-pin-picker -- key reference (bootloader: $BOOTLOADER)
 
-  Enter    Pin the highlighted generation (asks for a short name, a menu
-           title, and an optional comment). One at a time only.
-           Limine only -- on systemd-boot this explains why and does
-           nothing else.
+  Enter    On a generation row: pin it (asks for a short name, a menu
+           title, and an optional comment). Limine only -- on
+           systemd-boot this explains why and does nothing else.
+           On a pin row (📌, shown even if its source generation is
+           gone from the system profile): unpin it -- removes it from
+           the pins file, then optionally rebuilds. One row at a time.
 
   Tab      Mark the highlighted generation for a multi-select action
            (d or h). Shift-Tab unmarks it.
@@ -233,6 +240,12 @@ limine-pin-picker -- key reference (bootloader: $BOOTLOADER)
   q / Esc  Quit the tool entirely (as does Ctrl-C, any time). 'q' at a
            prompt or confirmation instead cancels just that one action
            and returns you here.
+
+Pinning captures store paths directly, so a pin outlives its source
+generation being pruned/GC'd from the system profile -- that's the point.
+Pin rows (📌) are listed independent of whether a matching generation row
+exists, so you can always unpin something even long after its generation
+is gone.
 EOF
 
 # Prompts for one line of input. Prints to stdout via a result var. Returns 1
@@ -322,6 +335,53 @@ pin_generation() {
     echo "⚠️  This repo now has an active pin — your next rebuild MUST include --impure, e.g.:"
     echo "    nh os switch . -- --impure"
   fi
+}
+
+unpin_generation() {
+  local NAME="$1" CONFIRM REMAINING REBUILD_CONFIRM tmp
+
+  echo
+  echo "Unpinning '$NAME': removing it from $OUTPUT."
+  echo "(This only edits the pins file -- nothing in /boot or your boot menu"
+  echo "changes until you rebuild.)"
+  echo
+
+  read -rp "Remove pin '$NAME' from $OUTPUT? [yes/N]: " CONFIRM
+  if [[ "$CONFIRM" != "yes" ]]; then
+    echo "Skipped. '$NAME' was not removed."
+    return 1
+  fi
+
+  tmp=$(mktemp)
+  jq --arg name "$NAME" \
+    '[ .[] | select(.name != $name) ] | sort_by(.name)' \
+    "$OUTPUT" >"$tmp"
+  mv "$tmp" "$OUTPUT"
+
+  echo
+  echo "Removed '$NAME' from $OUTPUT."
+  echo "Review the diff, then rebuild normally."
+
+  REMAINING=$(jq 'length' "$OUTPUT")
+  if [[ "$REMAINING" -gt 0 ]]; then
+    read -rp "Rebuild now with 'nh os switch . -- --impure'? [yes/N]: " REBUILD_CONFIRM
+    if [[ "$REBUILD_CONFIRM" == "yes" ]]; then
+      nh os switch . -- --impure
+    fi
+    echo
+    echo "$REMAINING pin(s) still remain in $OUTPUT, so every rebuild still needs --impure."
+  else
+    read -rp "Rebuild now with 'nh os switch .'? [yes/N]: " REBUILD_CONFIRM
+    if [[ "$REBUILD_CONFIRM" == "yes" ]]; then
+      nh os switch .
+    fi
+    echo
+    echo "$OUTPUT is back to [] -- your next rebuild no longer needs --impure."
+  fi
+  echo
+  echo "Known quirk: if 'switch' doesn't actually clear this entry from the"
+  echo "boot menu, try 'nh os boot' instead (append '-- --impure' too if any"
+  echo "pins remain) -- confirmed to work when switch alone didn't."
 }
 
 gc_orphans_and_leftovers() {
@@ -491,10 +551,34 @@ while true; do
     ROWS+=("${gen}"$'\t'"${boot_marker}"$'\t'"${gen_date}"$'\t'"${nixos_ver}"$'\t'"${kernel_ver}${marker}")
   done
 
-  BODY=$(printf '%s\n' "${ROWS[@]}" | sort -t $'\t' -k1,1nr)
+  # Pins are captured store paths, decoupled from the system profile on
+  # purpose (that's the whole point -- they survive the source generation
+  # being pruned/GC'd from the profile). So a pin whose source generation
+  # is long gone from $LINKS above would otherwise never get a row here,
+  # and there'd be no way to unpin it short of the standalone --remove
+  # flag. List every current pin as its own row instead, independent of
+  # whether $LINKS still has a matching entry -- marked 📌, with a
+  # "pin:$name" id (instead of a bare generation number) so Enter below
+  # can tell a pin row from a generation row and unpin instead of pin.
+  PIN_ROWS=()
+  if backend_supports_pin && [[ -f "$OUTPUT" ]]; then
+    while IFS=$'\t' read -r pname ptitle; do
+      [[ -n "$pname" ]] || continue
+      pdate=$(grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' <<<"$ptitle" | head -n1)
+      [[ -n "$pdate" ]] || pdate="-"
+      PIN_ROWS+=("pin:${pname}"$'\t''📌'$'\t'"${pdate}"$'\t''-'$'\t'"pinned: ${pname}")
+    done < <(jq -r '.[] | "\(.name)\t\(.title)"' "$OUTPUT")
+  fi
 
-  HEADER_TEXT="NixOS Generations (${#ROWS[@]} total, ${BOOT_COUNT} in bootloader -- $BOOTLOADER)"
-  ENTER_LABEL="Enter:pin"
+  BODY=$(
+    {
+      printf '%s\n' "${ROWS[@]}"
+      [[ ${#PIN_ROWS[@]} -gt 0 ]] && printf '%s\n' "${PIN_ROWS[@]}"
+    } | sort -t $'\t' -k1,1nr
+  )
+
+  HEADER_TEXT="NixOS Generations (${#ROWS[@]} total, ${BOOT_COUNT} in bootloader, ${#PIN_ROWS[@]} pinned -- $BOOTLOADER)"
+  ENTER_LABEL="Enter:pin/unpin"
   backend_supports_pin || ENTER_LABEL="Enter:pin(Limine only)"
   FOOTER_TEXT="  q/Esc:quit   ${ENTER_LABEL}   Tab:multi-select   d:prune   h:harvest   g:gc   ?:help   ↑↓:move   Type to filter  "
 
@@ -537,6 +621,12 @@ while true; do
 
   if [[ "$KEY" == "d" ]]; then
     for GEN in "${SELECTED_GENS[@]}"; do
+      if [[ "$GEN" == pin:* ]]; then
+        echo
+        echo "'${GEN#pin:}' is a pin, not a generation -- pins aren't pruned." >&2
+        echo "Select it alone and press Enter to unpin it instead." >&2
+        continue
+      fi
       # '|| true': prune_generation returns 1 whenever it refuses (in the
       # boot menu, is the currently-booted generation) or is cancelled at
       # its own confirmation. That's meant to skip just this generation and
@@ -549,6 +639,12 @@ while true; do
 
   if [[ "$KEY" == "h" ]]; then
     for GEN in "${SELECTED_GENS[@]}"; do
+      if [[ "$GEN" == pin:* ]]; then
+        echo
+        echo "'${GEN#pin:}' is a pin, not a generation -- pins aren't harvested." >&2
+        echo "Select it alone and press Enter to unpin it instead." >&2
+        continue
+      fi
       if [[ -z "${IN_BOOTLOADER[$GEN]:-}" ]]; then
         echo
         echo "Generation $GEN is not on the bootloader, so there's nothing to" >&2
@@ -566,16 +662,22 @@ while true; do
     continue
   fi
 
-  # Enter -> pin. Pinning asks for a name/title/comment per generation, so
-  # it only makes sense one at a time -- multi-select is for 'd'/'h'.
+  # Enter -> pin (a generation row) or unpin (a pin row). Either way it
+  # only makes sense one at a time -- multi-select is for 'd'/'h'.
   if [[ ${#SELECTED_GENS[@]} -gt 1 ]]; then
     echo
-    echo "Pinning only supports one generation at a time -- you selected ${#SELECTED_GENS[@]}." >&2
+    echo "Pin/unpin only supports one row at a time -- you selected ${#SELECTED_GENS[@]}." >&2
     echo "Tab-select multiple generations for prune ('d') or harvest ('h') instead." >&2
     echo
     continue
   fi
   GEN="${SELECTED_GENS[0]}"
+
+  if [[ "$GEN" == pin:* ]]; then
+    unpin_generation "${GEN#pin:}" || true
+    continue
+  fi
+
   LINK="/nix/var/nix/profiles/system-${GEN}-link"
   TARGET=$(readlink -f "$LINK")
   echo "Selected generation $GEN -> $TARGET"

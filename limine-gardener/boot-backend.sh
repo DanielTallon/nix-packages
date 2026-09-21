@@ -160,10 +160,27 @@ path_exists_root() {
   fi
 }
 
+mtime_root() {
+  # Prints a file's mtime as a Unix epoch (root-aware, like the other
+  # helpers above), or nothing if it can't be read.
+  local path="$1"
+  if [[ -r "$path" ]]; then
+    stat -c '%Y' "$path" 2>/dev/null
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo stat -c '%Y' "$path" 2>/dev/null
+  fi
+}
+
 detect_bootloader() {
   # Prints "limine" or "systemd-boot" on stdout, or exits with an error if
-  # neither marker is present (or both are, since that's ambiguous enough
-  # to want an explicit --bootloader rather than a guess).
+  # neither marker is present.
+  #
+  # If BOTH markers are present, this is very commonly a stale leftover --
+  # NixOS's bootloader installers don't clean up the *previous* loader's
+  # files when you switch, so an abandoned config just sits there
+  # untouched forever. Only the bootloader actually in use gets its files
+  # rewritten on every rebuild, so the one with the more recent mtime wins;
+  # --bootloader is still there to override this guess if it's ever wrong.
   local have_limine=0 have_systemd_boot=0
   path_exists_root "$LIMINE_CONF" && have_limine=1
   path_exists_root "/boot/loader/loader.conf" && have_systemd_boot=1
@@ -173,10 +190,28 @@ detect_bootloader() {
   elif [[ "$have_systemd_boot" -eq 1 && "$have_limine" -eq 0 ]]; then
     echo "systemd-boot"
   elif [[ "$have_limine" -eq 1 && "$have_systemd_boot" -eq 1 ]]; then
-    echo "Error: both $LIMINE_CONF and /boot/loader/loader.conf exist --" >&2
-    echo "can't auto-detect which bootloader is actually in use. Pass" >&2
-    echo "--bootloader limine or --bootloader systemd-boot explicitly." >&2
-    exit 1
+    local limine_mtime systemd_boot_mtime
+    limine_mtime=$(mtime_root "$LIMINE_CONF")
+    systemd_boot_mtime=$(mtime_root "/boot/loader/loader.conf")
+    if [[ -n "$limine_mtime" && -n "$systemd_boot_mtime" ]]; then
+      echo "Note: both $LIMINE_CONF and /boot/loader/loader.conf exist --" >&2
+      echo "one is likely a stale leftover from before you switched" >&2
+      echo "bootloaders. Picking whichever was rebuilt more recently." >&2
+      if [[ "$limine_mtime" -ge "$systemd_boot_mtime" ]]; then
+        echo "-> limine ($LIMINE_CONF is newer)" >&2
+        echo "limine"
+      else
+        echo "-> systemd-boot (/boot/loader/loader.conf is newer)" >&2
+        echo "systemd-boot"
+      fi
+      echo "If this guess is wrong, pass --bootloader limine or --bootloader systemd-boot explicitly." >&2
+    else
+      echo "Error: both $LIMINE_CONF and /boot/loader/loader.conf exist, and" >&2
+      echo "at least one of their mtimes couldn't be read -- can't guess" >&2
+      echo "which is actually in use. Pass --bootloader limine or" >&2
+      echo "--bootloader systemd-boot explicitly." >&2
+      exit 1
+    fi
   else
     echo "Error: found neither $LIMINE_CONF nor /boot/loader/loader.conf --" >&2
     echo "this tool only supports Limine and systemd-boot on NixOS. If one" >&2
