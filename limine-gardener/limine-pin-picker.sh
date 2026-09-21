@@ -573,7 +573,9 @@ while true; do
   BODY=$(
     {
       printf '%s\n' "${ROWS[@]}"
-      [[ ${#PIN_ROWS[@]} -gt 0 ]] && printf '%s\n' "${PIN_ROWS[@]}"
+      if [[ ${#PIN_ROWS[@]} -gt 0 ]]; then
+        printf '%s\n' "${PIN_ROWS[@]}"
+      fi
     } | sort -t $'\t' -k1,1nr
   )
 
