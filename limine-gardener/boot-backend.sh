@@ -143,13 +143,30 @@ try_list_root_dir() {
 
 # --- detection / init --------------------------------------------------------
 
+path_exists_root() {
+  # Like [[ -e "$path" ]], but falls back to sudo when a plain check can't
+  # be trusted -- a parent directory that isn't traversable by the calling
+  # user (very common for /boot/limine or /boot itself) makes -e silently
+  # report "doesn't exist" even when the file is right there. Mirrors the
+  # same reasoning read_root_file/list_root_dir already apply to actually
+  # reading things.
+  local path="$1"
+  if [[ -e "$path" ]]; then
+    return 0
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo test -e "$path" 2>/dev/null
+  else
+    return 1
+  fi
+}
+
 detect_bootloader() {
   # Prints "limine" or "systemd-boot" on stdout, or exits with an error if
   # neither marker is present (or both are, since that's ambiguous enough
   # to want an explicit --bootloader rather than a guess).
   local have_limine=0 have_systemd_boot=0
-  [[ -e "$LIMINE_CONF" ]] && have_limine=1
-  [[ -e "/boot/loader/loader.conf" ]] && have_systemd_boot=1
+  path_exists_root "$LIMINE_CONF" && have_limine=1
+  path_exists_root "/boot/loader/loader.conf" && have_systemd_boot=1
 
   if [[ "$have_limine" -eq 1 && "$have_systemd_boot" -eq 0 ]]; then
     echo "limine"
@@ -342,8 +359,15 @@ backend_apply_evict() {
   case "$BOOTLOADER" in
     limine)
       backup="${LIMINE_CONF}.bak-$(date +%Y%m%d%H%M%S)"
-      local new_content
+      local new_content orig_mode
       new_content=$(_limine_conf_without_gen "$entry_id")
+      # Capture the original file's permission bits before touching
+      # anything -- the write below goes through a mktemp file (600 by
+      # default), and without this, `cp` (no -p) onto ${LIMINE_CONF}.new
+      # would silently carry that 600 forward onto the real limine.conf,
+      # locking non-root reads (including this tool's own next run) out
+      # of a file that was likely more open before.
+      orig_mode=$(sudo stat -c '%a' "$LIMINE_CONF" 2>/dev/null || echo "")
       echo "Backing up to $backup..."
       sudo cp -p "$LIMINE_CONF" "$backup"
       local tmpfile
@@ -352,6 +376,7 @@ backend_apply_evict() {
       echo "Writing new $LIMINE_CONF..."
       sudo cp "$tmpfile" "${LIMINE_CONF}.new"
       sudo mv "${LIMINE_CONF}.new" "$LIMINE_CONF"
+      [[ -n "$orig_mode" ]] && sudo chmod "$orig_mode" "$LIMINE_CONF"
       rm -f "$tmpfile"
       ;;
     systemd-boot)
