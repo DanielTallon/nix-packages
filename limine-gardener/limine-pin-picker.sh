@@ -23,12 +23,12 @@
 # stray build results. None of the three touch the generation list itself
 # or any file this tool doesn't already document.
 #
-# Bootloader (Limine or systemd-boot) is auto-detected from what's on
-# /boot; pass --bootloader to override. 'd'/'h'/'g' work the same on
-# either. Pinning ('Enter') is Limine-only for now — it writes Nix-level
-# config consumed by limine-manual-pins.nix, which has no systemd-boot
-# equivalent yet — so on systemd-boot, Enter explains this and does
-# nothing else.
+# Bootloader (Limine, systemd-boot, or GRUB) is auto-detected from what's
+# on /boot; pass --bootloader to override. 'd'/'h'/'g' work the same on
+# all three. Pinning ('Enter') is Limine-only for now — it writes Nix-level
+# config consumed by limine-manual-pins.nix, which has no systemd-boot or
+# GRUB equivalent yet — so on those, Enter explains this and does nothing
+# else.
 set -euo pipefail
 
 OUTPUT="limine-pins.json"
@@ -57,15 +57,15 @@ Usage:
   limine-pin-picker --list          List currently pinned entries
   limine-pin-picker --remove NAME   Remove a pinned entry by name
   limine-pin-picker --output FILE   Use a different pins file (default: ./limine-pins.json)
-  limine-pin-picker --bootloader limine|systemd-boot
+  limine-pin-picker --bootloader limine|systemd-boot|grub
                                      Skip auto-detection and use this backend
   limine-pin-picker --help          Show this help
 
-Bootloader (Limine or systemd-boot) is auto-detected from what's on /boot.
-'d'/'h'/'g' work the same on either. Pinning ('Enter') is Limine-only for
-now -- it writes Nix-level config consumed by limine-manual-pins.nix,
-which has no systemd-boot equivalent yet -- so on systemd-boot, Enter
-explains this and does nothing else.
+Bootloader (Limine, systemd-boot, or GRUB) is auto-detected from what's on
+/boot. 'd'/'h'/'g' work the same on all three. Pinning ('Enter') is
+Limine-only for now -- it writes Nix-level config consumed by
+limine-manual-pins.nix, which has no systemd-boot or GRUB equivalent yet --
+so on those, Enter explains this and does nothing else.
 
 The pins file is always fully rewritten (never patched in place) and kept
 sorted by name, so it stays clean and diffable in git.
@@ -200,11 +200,11 @@ RESCUE_ARGS=(--bootloader "$BOOTLOADER")
 HELP_FILE=$(mktemp)
 trap 'rm -f "$HELP_FILE"' EXIT
 cat >"$HELP_FILE" <<EOF
-limine-pin-picker -- key reference (bootloader: $BOOTLOADER)
+Gardener -- key reference (bootloader: $BOOTLOADER)
 
   Enter    On a generation row: pin it (asks for a short name, a menu
            title, and an optional comment). Limine only -- on
-           systemd-boot this explains why and does nothing else.
+           systemd-boot or GRUB this explains why and does nothing else.
            On a pin row (📌, shown even if its source generation is
            gone from the system profile): unpin it -- removes it from
            the pins file, then optionally rebuilds. One row at a time.
@@ -594,7 +594,7 @@ while true; do
         --header-first \
         --header-lines=1 \
         --header "$HEADER_TEXT" \
-        --border-label ' limine-pin-picker ' \
+        --border-label ' Gardener ' \
         --footer "$FOOTER_TEXT" \
         --multi \
         --bind 'q:abort' \

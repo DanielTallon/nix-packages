@@ -1,13 +1,13 @@
 # boot-backend.sh — bootloader abstraction shared by limine-pin-picker.sh
 # and limine-boot-rescue.sh. Meant to be sourced, never executed directly.
 #
-# Supports two backends: "limine" and "systemd-boot". Detection is
-# automatic (based on which marker file exists under /boot) unless
-# overridden with --bootloader limine|systemd-boot, which both scripts
-# accept and pass through to backend_init.
+# Supports three backends: "limine", "systemd-boot", and "grub". Detection
+# is automatic (based on which marker file exists under /boot) unless
+# overridden with --bootloader limine|systemd-boot|grub, which both
+# scripts accept and pass through to backend_init.
 #
 # Public surface, valid after calling backend_init:
-#   $BOOTLOADER          "limine" or "systemd-boot"
+#   $BOOTLOADER          "limine", "systemd-boot", or "grub"
 #   $BOOT_KERNELS_DIR     directory holding the copied kernel/initrd/EFI files
 #   $BOOT_CONF_DISPLAY    human-readable name for "the boot menu config", for messages
 #
@@ -15,7 +15,7 @@
 #       Returns 0 (true) only for limine. The picker uses this to gate
 #       'Enter' -- pinning writes Nix-level config consumed by a
 #       Limine-specific NixOS module (limine-manual-pins.nix) that has no
-#       systemd-boot equivalent yet.
+#       systemd-boot or GRUB equivalent yet.
 #
 #   backend_kept_generations_lenient
 #       Prints a newline list of generation numbers currently on the boot
@@ -40,10 +40,12 @@
 #
 #   backend_entry_id_for_gen GEN
 #       Prints an opaque identifier for generation GEN's boot-menu entry
-#       (for limine: the generation number itself; for systemd-boot: the
-#       entry file's basename). Exits if GEN isn't currently on the boot
-#       menu. Used both to exclude it in backend_referenced_files and to
-#       drive backend_preview_evict / backend_apply_evict.
+#       (for limine and grub: the generation number itself, since both
+#       are single shared config files identified by content, not by
+#       filename; for systemd-boot: the entry file's basename). Exits if
+#       GEN isn't currently on the boot menu. Used both to exclude it in
+#       backend_referenced_files and to drive backend_preview_evict /
+#       backend_apply_evict.
 #
 #   backend_preview_evict ENTRY_ID
 #       Prints, to stdout, the human-readable block/file that would be
@@ -65,6 +67,9 @@ LIMINE_KERNELS_DIR="/boot/limine/kernels"
 
 SYSTEMD_BOOT_ENTRIES_DIR="/boot/loader/entries"
 SYSTEMD_BOOT_EFI_NIXOS_DIR="/boot/EFI/nixos"
+
+GRUB_CONF="/boot/grub/grub.cfg"
+GRUB_KERNELS_DIR="/boot/kernels"
 
 # --- generic root-read helpers ----------------------------------------------
 
@@ -109,6 +114,13 @@ try_read_root_file() {
 list_root_dir() {
   # Strict: exits the script if the directory can't be listed at all.
   # $1: directory  $2: find -name glob pattern (default: all files)
+  #
+  # Deliberately does NOT treat "doesn't exist" as "zero files" here --
+  # for limine/systemd-boot a missing kernels dir is a genuinely broken
+  # install and should fail loud, matching the strict/lenient split
+  # documented at the top of this file. GRUB's copyKernels=false case
+  # (where $GRUB_KERNELS_DIR legitimately never exists) is handled by its
+  # caller checking path_exists_root first, not by softening this.
   local path="$1" pattern="${2:-*}"
   if [[ -r "$path" ]]; then
     find "$path" -maxdepth 1 -type f -name "$pattern" -printf '%f\t%s\n'
@@ -171,65 +183,86 @@ mtime_root() {
   fi
 }
 
-detect_bootloader() {
-  # Prints "limine" or "systemd-boot" on stdout, or exits with an error if
-  # neither marker is present.
-  #
-  # If BOTH markers are present, this is very commonly a stale leftover --
-  # NixOS's bootloader installers don't clean up the *previous* loader's
-  # files when you switch, so an abandoned config just sits there
-  # untouched forever. Only the bootloader actually in use gets its files
-  # rewritten on every rebuild, so the one with the more recent mtime wins;
-  # --bootloader is still there to override this guess if it's ever wrong.
-  local have_limine=0 have_systemd_boot=0
-  path_exists_root "$LIMINE_CONF" && have_limine=1
-  path_exists_root "/boot/loader/loader.conf" && have_systemd_boot=1
+_BACKEND_NAMES=(limine systemd-boot grub)
 
-  if [[ "$have_limine" -eq 1 && "$have_systemd_boot" -eq 0 ]]; then
-    echo "limine"
-  elif [[ "$have_systemd_boot" -eq 1 && "$have_limine" -eq 0 ]]; then
-    echo "systemd-boot"
-  elif [[ "$have_limine" -eq 1 && "$have_systemd_boot" -eq 1 ]]; then
-    local limine_mtime systemd_boot_mtime
-    limine_mtime=$(mtime_root "$LIMINE_CONF")
-    systemd_boot_mtime=$(mtime_root "/boot/loader/loader.conf")
-    if [[ -n "$limine_mtime" && -n "$systemd_boot_mtime" ]]; then
-      echo "Note: both $LIMINE_CONF and /boot/loader/loader.conf exist --" >&2
+_marker_for_backend() {
+  case "$1" in
+    limine) echo "$LIMINE_CONF" ;;
+    systemd-boot) echo "/boot/loader/loader.conf" ;;
+    grub) echo "$GRUB_CONF" ;;
+  esac
+}
+
+detect_bootloader() {
+  # Prints "limine", "systemd-boot", or "grub" on stdout, or exits with an
+  # error if none of the three markers is present.
+  #
+  # If MORE THAN ONE marker is present, this is very commonly a stale
+  # leftover -- NixOS's bootloader installers don't clean up the
+  # *previous* loader's files when you switch, so an abandoned config just
+  # sits there untouched forever. Only the bootloader actually in use gets
+  # its files rewritten on every rebuild, so whichever marker has the most
+  # recent mtime wins; --bootloader is still there to override this guess
+  # if it's ever wrong.
+  local b marker found=()
+  for b in "${_BACKEND_NAMES[@]}"; do
+    marker="$(_marker_for_backend "$b")"
+    path_exists_root "$marker" && found+=("$b")
+  done
+
+  case "${#found[@]}" in
+    0)
+      echo "Error: found none of $(_marker_for_backend limine)," >&2
+      echo "/boot/loader/loader.conf, or $(_marker_for_backend grub) --" >&2
+      echo "this tool only supports Limine, systemd-boot, and GRUB on NixOS." >&2
+      echo "If one of these really is in use but under a nonstandard path," >&2
+      echo "pass --bootloader limine, --bootloader systemd-boot, or" >&2
+      echo "--bootloader grub explicitly to skip detection." >&2
+      exit 1
+      ;;
+    1)
+      echo "${found[0]}"
+      ;;
+    *)
+      echo "Note: more than one bootloader marker exists (${found[*]}) --" >&2
       echo "one is likely a stale leftover from before you switched" >&2
       echo "bootloaders. Picking whichever was rebuilt more recently." >&2
-      if [[ "$limine_mtime" -ge "$systemd_boot_mtime" ]]; then
-        echo "-> limine ($LIMINE_CONF is newer)" >&2
-        echo "limine"
+      local best="" best_mtime=-1 this_mtime all_known=1
+      for b in "${found[@]}"; do
+        this_mtime="$(mtime_root "$(_marker_for_backend "$b")")"
+        if [[ -z "$this_mtime" ]]; then
+          all_known=0
+          break
+        fi
+        if [[ "$this_mtime" -gt "$best_mtime" ]]; then
+          best_mtime="$this_mtime"
+          best="$b"
+        fi
+      done
+      if [[ "$all_known" -eq 1 && -n "$best" ]]; then
+        echo "-> $best ($(_marker_for_backend "$best") is newest)" >&2
+        echo "$best"
+        echo "If this guess is wrong, pass --bootloader limine, --bootloader systemd-boot, or --bootloader grub explicitly." >&2
       else
-        echo "-> systemd-boot (/boot/loader/loader.conf is newer)" >&2
-        echo "systemd-boot"
+        echo "Error: more than one bootloader marker exists, and at least" >&2
+        echo "one of their mtimes couldn't be read -- can't guess which is" >&2
+        echo "actually in use. Pass --bootloader limine, --bootloader" >&2
+        echo "systemd-boot, or --bootloader grub explicitly." >&2
+        exit 1
       fi
-      echo "If this guess is wrong, pass --bootloader limine or --bootloader systemd-boot explicitly." >&2
-    else
-      echo "Error: both $LIMINE_CONF and /boot/loader/loader.conf exist, and" >&2
-      echo "at least one of their mtimes couldn't be read -- can't guess" >&2
-      echo "which is actually in use. Pass --bootloader limine or" >&2
-      echo "--bootloader systemd-boot explicitly." >&2
-      exit 1
-    fi
-  else
-    echo "Error: found neither $LIMINE_CONF nor /boot/loader/loader.conf --" >&2
-    echo "this tool only supports Limine and systemd-boot on NixOS. If one" >&2
-    echo "of these really is in use but under a nonstandard path, pass" >&2
-    echo "--bootloader limine or --bootloader systemd-boot explicitly to skip" >&2
-    echo "detection." >&2
-    exit 1
-  fi
+      ;;
+  esac
 }
 
 backend_init() {
-  # $1: explicit override ("limine"/"systemd-boot"), or empty to auto-detect
+  # $1: explicit override ("limine"/"systemd-boot"/"grub"), or empty to
+  # auto-detect
   local override="${1:-}"
   if [[ -n "$override" ]]; then
     case "$override" in
-      limine | systemd-boot) BOOTLOADER="$override" ;;
+      limine | systemd-boot | grub) BOOTLOADER="$override" ;;
       *)
-        echo "Error: --bootloader must be 'limine' or 'systemd-boot', got '$override'." >&2
+        echo "Error: --bootloader must be 'limine', 'systemd-boot', or 'grub', got '$override'." >&2
         exit 1
         ;;
     esac
@@ -245,6 +278,10 @@ backend_init() {
     systemd-boot)
       BOOT_KERNELS_DIR="$SYSTEMD_BOOT_EFI_NIXOS_DIR"
       BOOT_CONF_DISPLAY="the systemd-boot entries directory ($SYSTEMD_BOOT_ENTRIES_DIR)"
+      ;;
+    grub)
+      BOOT_KERNELS_DIR="$GRUB_KERNELS_DIR"
+      BOOT_CONF_DISPLAY="$GRUB_CONF"
       ;;
   esac
 }
@@ -268,6 +305,26 @@ _kept_generations_systemd_boot() {
   done <<<"$listing"
 }
 
+_kept_generations_grub() {
+  # GRUB's NixOS module names each kept generation's block (a plain
+  # `menuentry` if it has no specialisations, or a `submenu` wrapping
+  # several `menuentry`s if it does) "NixOS - Configuration N (date -
+  # version)", inside the outer "NixOS - All configurations" submenu.
+  #
+  # The "N (" anchor -- a space then an open paren directly after the
+  # number -- matters: a generation WITH specialisations also has inner
+  # per-specialisation menuentries titled "NixOS - Configuration N -
+  # Default (...)" and "NixOS - Configuration N - <spec name>", which
+  # share the "NixOS - Configuration N" prefix but are never followed by
+  # " (" there. Without this anchor those inner lines match too, and a
+  # single kept generation gets counted (and, worse, evicted-and-
+  # revalidated) as several -- confirmed in a sandboxed grub.cfg with one
+  # specialised generation, which showed up 3 times instead of once.
+  local content="$1"
+  grep -oE '^(menuentry|submenu) "NixOS - Configuration [0-9]+ \(' <<<"$content" |
+    grep -oE '[0-9]+' || true
+}
+
 backend_kept_generations_lenient() {
   case "$BOOTLOADER" in
     limine)
@@ -280,6 +337,11 @@ backend_kept_generations_lenient() {
       listing=$(try_list_root_dir "$SYSTEMD_BOOT_ENTRIES_DIR" '*.conf') || return 0
       _kept_generations_systemd_boot "$listing"
       ;;
+    grub)
+      local content
+      content=$(try_read_root_file "$GRUB_CONF") || return 0
+      _kept_generations_grub "$content"
+      ;;
   esac
 }
 
@@ -290,6 +352,9 @@ backend_kept_generations_strict() {
       ;;
     systemd-boot)
       _kept_generations_systemd_boot "$(list_root_dir "$SYSTEMD_BOOT_ENTRIES_DIR" '*.conf')"
+      ;;
+    grub)
+      _kept_generations_grub "$(read_root_file "$GRUB_CONF")"
       ;;
   esac
 }
@@ -307,7 +372,62 @@ backend_entry_id_for_gen() {
   case "$BOOTLOADER" in
     limine) echo "$gen" ;;
     systemd-boot) echo "nixos-generation-${gen}.conf" ;;
+    grub) echo "$gen" ;;
   esac
+}
+
+# --- GRUB block extraction (shared by referenced-files/preview/apply) ------
+#
+# grub.cfg is one shared file, like limine.conf, but a generation's block
+# isn't a fixed shape: no specialisations means one plain `menuentry { ...
+# }`, but any specialisations wrap that same entry (plus one more per
+# specialisation) inside a `submenu { ... }`. Rather than assume which
+# shape it is, track brace depth from the opening `menuentry`/`submenu`
+# line to its balanced closing "}" -- this handles both uniformly, and
+# doesn't depend on a sentinel comment the way the Limine parser does.
+
+_grub_block_for_gen() {
+  # $1: grub.cfg content, $2: generation number. Prints just that
+  # generation's block (read-only extraction).
+  local content="$1" gen="$2"
+  awk -v gen="$gen" '
+    BEGIN { depth = 0; capturing = 0 }
+    !capturing && $0 ~ ("^(menuentry|submenu) \"NixOS - Configuration " gen " \\(") {
+      capturing = 1
+      o = gsub(/\{/, "{"); c = gsub(/\}/, "}")
+      depth = o - c
+      print
+      next
+    }
+    capturing {
+      o = gsub(/\{/, "{"); c = gsub(/\}/, "}")
+      depth += o - c
+      print
+      if (depth <= 0) capturing = 0
+    }
+  ' <<<"$content"
+}
+
+_grub_conf_without_gen() {
+  # $1: grub.cfg content, $2: generation number. Prints content with that
+  # generation's whole block cut out (the inverse of _grub_block_for_gen).
+  local content="$1" gen="$2"
+  awk -v gen="$gen" '
+    BEGIN { depth = 0; skipping = 0 }
+    !skipping && $0 ~ ("^(menuentry|submenu) \"NixOS - Configuration " gen " \\(") {
+      skipping = 1
+      o = gsub(/\{/, "{"); c = gsub(/\}/, "}")
+      depth = o - c
+      next
+    }
+    skipping {
+      o = gsub(/\{/, "{"); c = gsub(/\}/, "}")
+      depth += o - c
+      if (depth <= 0) skipping = 0
+      next
+    }
+    { print }
+  ' <<<"$content"
 }
 
 # --- referenced files (for orphan detection) --------------------------------
@@ -344,6 +464,20 @@ _referenced_files_systemd_boot() {
   grep -oE '/EFI/nixos/[^[:space:]]+\.efi' <<<"$all_content" | sed 's#^/EFI/nixos/##' | sort -u
 }
 
+_referenced_files_grub() {
+  # $1: grub.cfg content, $2: exclude entry id (a generation number), or
+  # "" to exclude nothing.
+  local conf_content="$1" exclude_gen="${2:-}" filtered="$1"
+  if [[ -n "$exclude_gen" ]]; then
+    filtered=$(_grub_conf_without_gen "$conf_content" "$exclude_gen")
+  fi
+  # Matched as "...kernels/NAME" rather than anchored to a fixed prefix,
+  # since the path GRUB writes ("/kernels/NAME" vs "/boot/kernels/NAME")
+  # depends on whether $bootPath is its own filesystem -- either way the
+  # files actually live in $GRUB_KERNELS_DIR, which is what matters here.
+  grep -oE '/kernels/[^[:space:]]+' <<<"$filtered" | sed 's#.*/kernels/##' | sort -u
+}
+
 backend_referenced_files() {
   # $1: entry id to exclude, or "" (unset) to exclude nothing.
   local exclude="${1:-}"
@@ -353,6 +487,9 @@ backend_referenced_files() {
       ;;
     systemd-boot)
       _referenced_files_systemd_boot "$exclude"
+      ;;
+    grub)
+      _referenced_files_grub "$(read_root_file "$GRUB_CONF")" "$exclude"
       ;;
   esac
 }
@@ -380,6 +517,9 @@ backend_preview_evict() {
     systemd-boot)
       echo "$SYSTEMD_BOOT_ENTRIES_DIR/$entry_id:"
       read_root_file "$SYSTEMD_BOOT_ENTRIES_DIR/$entry_id"
+      ;;
+    grub)
+      _grub_block_for_gen "$(read_root_file "$GRUB_CONF")" "$entry_id"
       ;;
   esac
 }
@@ -421,6 +561,27 @@ backend_apply_evict() {
       sudo cp -p "$entry_path" "$backup"
       echo "Removing $entry_path..."
       sudo rm -f "$entry_path"
+      ;;
+    grub)
+      backup="${GRUB_CONF}.bak-$(date +%Y%m%d%H%M%S)"
+      local new_content orig_mode
+      new_content=$(_grub_conf_without_gen "$(read_root_file "$GRUB_CONF")" "$entry_id")
+      # Same reasoning as the limine branch above: capture the original
+      # file's permission bits before writing through a mktemp file (600
+      # by default), so a plain `cp` (no -p) onto grub.cfg.new doesn't
+      # silently lock non-root reads out of a file that was likely more
+      # open before.
+      orig_mode=$(sudo stat -c '%a' "$GRUB_CONF" 2>/dev/null || echo "")
+      echo "Backing up to $backup..."
+      sudo cp -p "$GRUB_CONF" "$backup"
+      local tmpfile
+      tmpfile=$(mktemp)
+      printf '%s\n' "$new_content" >"$tmpfile"
+      echo "Writing new $GRUB_CONF..."
+      sudo cp "$tmpfile" "${GRUB_CONF}.new"
+      sudo mv "${GRUB_CONF}.new" "$GRUB_CONF"
+      [[ -n "$orig_mode" ]] && sudo chmod "$orig_mode" "$GRUB_CONF"
+      rm -f "$tmpfile"
       ;;
   esac
   printf -v "$__backup_var" '%s' "$backup"

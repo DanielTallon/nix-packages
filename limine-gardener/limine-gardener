@@ -9,6 +9,14 @@
 # here for Nix's string-interpolation rules to trip over.
 set -euo pipefail
 
+# Most terminals (Konsole included) show the running foreground process's
+# comm name as the tab/window title -- which, after Nix installs this as
+# limine-pin-picker.sh and the kernel truncates comm to 15 chars, shows up
+# as "limine-pin-pick". This OSC 0 sequence sets an explicit title instead,
+# which takes precedence over that default; guarded on being an actual
+# terminal so it doesn't leak escape codes into piped/redirected output.
+[[ -t 1 ]] && printf '\033]0;Gardener\007'
+
 SELF="$(readlink -f "${BASH_SOURCE[0]}")"
 LIBEXEC="$(cd "$(dirname "$SELF")/../libexec/limine-gardener" && pwd)"
 

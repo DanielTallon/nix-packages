@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # limine-boot-rescue — diagnostic + rescue tool for a 100%-full /boot on a
-# Limine or systemd-boot + NixOS system.
+# Limine, systemd-boot, or GRUB + NixOS system.
 #
 # nix-env --delete-generations alone can't free /boot space: the actual
 # kernel/initrd/EFI files and the bootloader's own menu entries are only
@@ -13,8 +13,8 @@
 # --apply is required to actually change anything, and even then requires
 # typed confirmation before touching disk.
 #
-# Bootloader (Limine or systemd-boot) is auto-detected from what's on
-# /boot; pass --bootloader to override. See boot-backend.sh (sourced
+# Bootloader (Limine, systemd-boot, or GRUB) is auto-detected from what's
+# on /boot; pass --bootloader to override. See boot-backend.sh (sourced
 # below, alongside this script) for exactly what differs between them.
 set -euo pipefail
 
@@ -44,7 +44,7 @@ Usage:
                                      Actually evict generation N's boot-menu
                                      entry and delete its now-orphaned files
                                      (requires typed confirmation)
-  limine-boot-rescue --bootloader limine|systemd-boot
+  limine-boot-rescue --bootloader limine|systemd-boot|grub
                                      Skip auto-detection and use this backend
   limine-boot-rescue --help         Show this help
 
@@ -54,8 +54,8 @@ the boot menu. --apply always backs up the affected boot-menu config first
 and never touches the currently-booted generation or drops the boot menu
 below 2 kept generations, no matter what.
 
-Supports Limine and systemd-boot; the bootloader is auto-detected from what
-exists under /boot unless --bootloader is given explicitly.
+Supports Limine, systemd-boot, and GRUB; the bootloader is auto-detected
+from what exists under /boot unless --bootloader is given explicitly.
 EOF
 }
 
@@ -102,7 +102,24 @@ echo
 REFERENCED="$(backend_referenced_files)"
 
 echo "== Phase 1: orphaned files in $BOOT_KERNELS_DIR (referenced by nothing) =="
-DISK_FILES="$(list_root_dir "$BOOT_KERNELS_DIR")"
+
+# GRUB with boot.loader.grub.copyKernels = false (the default when /boot
+# and /nix/store share a filesystem) never copies anything into
+# $GRUB_KERNELS_DIR -- it may not exist at all, and that's a normal state,
+# not a broken install, so skip list_root_dir's usual "must exist" check
+# rather than have it error. limine/systemd-boot don't get this
+# treatment: for them a missing kernels dir really would mean something's
+# broken, and should still fail loud.
+if [[ "$BOOTLOADER" == "grub" ]] && ! path_exists_root "$GRUB_KERNELS_DIR"; then
+  echo "  (doesn't exist -- this system has boot.loader.grub.copyKernels ="
+  echo "  false, so GRUB references /nix/store directly instead of"
+  echo "  copying kernels into /boot. Nothing is ever orphaned there, and"
+  echo "  harvesting a generation only removes its grub.cfg entry -- no"
+  echo "  /boot space is reclaimed.)"
+  DISK_FILES=""
+else
+  DISK_FILES="$(list_root_dir "$BOOT_KERNELS_DIR")"
+fi
 
 TOTAL_ORPHAN_BYTES=0
 ORPHAN_COUNT=0
