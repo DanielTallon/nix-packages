@@ -11,18 +11,39 @@ can't even run.
 Two scripts under one command:
 
 - **`limine-gardener`** — browse your system generations and pin one to the
-  Limine boot menu (bypassing `maxGenerations` garbage collection), prune
-  one that isn't in the boot menu, harvest one that is (evict + reclaim its
-  `/boot` space on the spot), or garbage-collect boot orphans and
-  nix-shell/nix develop leftovers, from a single screen.
+  boot menu (bypassing `maxGenerations` garbage collection), prune one that
+  isn't in the boot menu, harvest one that is (evict + reclaim its `/boot`
+  space on the spot), or garbage-collect boot orphans and nix-shell/nix
+  develop leftovers, from a single screen.
 - **`limine-gardener rescue`** — diagnose and, if needed, fix a `/boot`
   partition that's full or close to it, by finding and safely removing
   files a normal rebuild can't reach because it doesn't have room to run.
 
-Both are companions to a small NixOS module, `limine-manual-pins.nix` (not
-included here — wire it into your own flake), which defines the
+Pinning is a companion to a small NixOS module, `limine-manual-pins.nix`
+(not included here — wire it into your own flake), which defines the
 `custom.limineManualPins` option that actually builds the Limine menu entry
 and copies files into `/boot`.
+
+## Bootloader support
+
+| | Limine | systemd-boot |
+|---|---|---|
+| Pick, prune, harvest, garbage-collect | ✅ | ✅ |
+| Rescue mode (`limine-gardener rescue`) | ✅ | ✅ |
+| Pin (`Enter`) | ✅ | ❌ (see below) |
+
+The bootloader is auto-detected from what's on `/boot` (presence of
+`/boot/limine/limine.conf` vs. `/boot/loader/loader.conf`); pass
+`--bootloader limine` or `--bootloader systemd-boot` to either script to
+skip detection.
+
+**Pinning is Limine-only for now.** It works by generating a Nix-level JSON
+file that `limine-manual-pins.nix` turns into a real Limine menu entry —
+there's no systemd-boot equivalent of that module yet, since systemd-boot's
+NixOS-managed entries are individual generated files rather than something
+a small side-channel module can cleanly inject into. On systemd-boot,
+pressing `Enter` explains this and does nothing else; prune/harvest/GC all
+work exactly the same as on Limine.
 
 ## Design goals
 
@@ -56,57 +77,63 @@ limine-gardener --list
 
 # Remove a pin by its name
 limine-gardener --remove gen-144
+
+# Skip bootloader auto-detection
+limine-gardener --bootloader systemd-boot
 ```
 
 The list shows generation number, date, NixOS/kernel version, and a `BOOT`
-column marking which generations are currently referenced in your Limine
-menu (reading `/boot/limine/limine.conf`, which needs `sudo` — you'll be
-prompted once, up front).
+column marking which generations are currently referenced in your boot
+menu (reading `/boot/limine/limine.conf` on Limine, or
+`/boot/loader/entries/` on systemd-boot — either needs `sudo` to read;
+you'll be prompted once, up front).
 
 - **Tab** marks a generation for a multi-select action without leaving the
   list; **Shift-Tab** unmarks one. Marking generations only matters for
   `d`/`h` below — pinning always applies to a single generation, since each
   pin needs its own name/title/comment, and `g` ignores selection entirely.
-- **Enter** on a generation pins it: resolves its `kernel`/`initrd`/`init`
-  store paths and `kernel-params` cmdline automatically, then asks for a
-  short name, a menu title, and an optional comment. Once written, it asks
-  `Rebuild now with 'nh os boot . -- --impure'? [yes/N]` — type `yes` to
-  run it on the spot, or anything else (including just Enter) to skip and
-  get a printed reminder instead, since it's easy to forget `--impure` is
-  now required (see below).
+- **Enter** on a generation pins it (**Limine only** — see
+  [Bootloader support](#bootloader-support) above; on systemd-boot this
+  prints an explanation and does nothing else): resolves its
+  `kernel`/`initrd`/`init` store paths and `kernel-params` cmdline
+  automatically, then asks for a short name, a menu title, and an optional
+  comment. Once written, it asks `Rebuild now with 'nh os boot . --
+  --impure'? [yes/N]` — type `yes` to run it on the spot, or anything else
+  (including just Enter) to skip and get a printed reminder instead, since
+  it's easy to forget `--impure` is now required (see below).
 - **`d`** and **`h`** are opposite ends of removing a generation, and each
   only works on the kind of generation the other doesn't — the `BOOT`
-  column tells you which is which:
+  column tells you which is which. Both work identically on Limine and
+  systemd-boot:
   - **`d`** **prunes** the selected generation(s) — only works on ones
     **not** currently in the boot menu. Deletes them from the NixOS system
     profile (`nix-env -p .../system --delete-generations`); doesn't touch
-    `/boot` or `limine.conf` at all, so the space isn't reclaimed until
-    your next `g`. Picking a generation that *is* in the boot menu refuses
-    with a message pointing you at `h` instead. Typed `yes` confirmation
-    per generation.
+    `/boot` at all, so the space isn't reclaimed until your next `g`.
+    Picking a generation that *is* in the boot menu refuses with a message
+    pointing you at `h` instead. Typed `yes` confirmation per generation.
   - **`h`** **harvests** the selected generation(s) — only works on ones
     **that are** currently in the boot menu. For each one, hands off to
-    `limine-gardener rescue --evict GEN --apply`, which removes its entry
-    from the Limine menu *and* deletes the `/boot` files that entry alone
-    was using — reclaiming the space immediately rather than waiting on a
+    `limine-gardener rescue --evict GEN --apply`, which removes its
+    boot-menu entry *and* deletes the `/boot` files that entry alone was
+    using — reclaiming the space immediately rather than waiting on a
     later GC + rebuild. It inherits every guardrail `rescue` already has:
     refuses the currently-booted generation, refuses to drop below 2 kept
-    generations, backs up `limine.conf` before touching it, and needs
-    typed confirmation per generation. Picking a generation that is *not*
-    in the boot menu refuses with a message pointing you at `d` instead.
-    See [Rescue mode](#rescue-mode) below for exactly what that
-    confirmation flow looks like.
+    generations, backs up the affected boot-menu config before touching
+    it, and needs typed confirmation per generation. Picking a generation
+    that is *not* in the boot menu refuses with a message pointing you at
+    `d` instead. See [Rescue mode](#rescue-mode) below for exactly what
+    that confirmation flow looks like.
 - **`g`** **garbage-collects** — a global action, independent of whatever's
   highlighted or marked. It reports orphaned `/boot` files the same way
-  `limine-gardener rescue` does (Phase 1: files nothing in `limine.conf`
-  references), then reports dead Nix store paths (`nix-store --gc
+  `limine-gardener rescue` does (Phase 1: files referenced by no current
+  boot-menu entry), then reports dead Nix store paths (`nix-store --gc
   --print-dead`) — the usual home of nix-shell/nix develop leftovers, stray
   build results, and anything freed up by a prior `d`. One `[yes/N]`
   confirmation runs both cleanups for real: the `/boot` orphans are deleted
   via `rescue --apply` (its own guardrails and confirmation still apply),
   then `nix-collect-garbage` runs. It never deletes a generation from the
-  system profile itself and never touches `limine.conf` directly — that's
-  what `h` is for.
+  system profile itself and never touches the boot-menu config directly —
+  that's what `h` is for.
 - **`?`** toggles an in-place help panel listing all of the above, without
   leaving the list.
 - **`q`** or **Esc** at the list quits the tool entirely, as does Ctrl-C at
@@ -131,6 +158,9 @@ root — if you set it from a file one directory down (e.g. `hosts.nix` in a
 of your dotfiles like any other tracked file.
 
 ### ⚠️ Requires `--impure` while any pin exists
+
+*(Limine only — pinning doesn't exist on systemd-boot yet, so this whole
+section is moot there.)*
 
 Referencing an existing generation's store paths is inherently impure —
 those paths live only on your local machine and aren't declared anywhere in
@@ -160,6 +190,8 @@ clear the entry from the boot menu. If that happens, try `boot` instead
 alone didn't. Cause not diagnosed; this is just a documented workaround.
 
 ### ⚠️ The real disk cost of a pin can be much bigger than the kernel
+
+*(Limine only, for the same reason as above.)*
 
 A pin isn't just the ~100-300 MB kernel/initrd pair it captures. `pin.init`
 points at that generation's `init` script, which is the entry point for
@@ -206,24 +238,42 @@ limine-gardener rescue --apply
 # Actually evict a generation and delete its now-orphaned files
 # (types the generation number back, then 'yes', to confirm)
 limine-gardener rescue --evict 166 --apply
+
+# Skip bootloader auto-detection
+limine-gardener rescue --bootloader systemd-boot
 ```
 
 ### How it works
 
-- **Phase 1 (zero risk):** parses every `kernel_path`/`module_path` line in
-  `limine.conf` to find files in `/boot/limine/kernels/` that nothing
-  currently references, and reports them. These are typically leftovers
-  from a rebuild that died partway through. Deleting them never touches the
-  boot menu.
+The mechanics differ slightly by bootloader, but the shape is the same:
+find files nothing references and remove them zero-risk first, then
+optionally remove one boot-menu entry and whatever that newly orphans.
+
+- **Phase 1 (zero risk):** finds files that no current boot-menu entry
+  references, and reports them. These are typically leftovers from a
+  rebuild that died partway through. Deleting them never touches the boot
+  menu.
+  - *Limine:* parses every `kernel_path`/`module_path` line in
+    `limine.conf` to build the referenced set, and compares it against
+    what's actually in `/boot/limine/kernels/`.
+  - *systemd-boot:* parses every `linux`/`initrd` line across all entry
+    files in `/boot/loader/entries/`, and compares that against what's
+    actually in `/boot/EFI/nixos/`.
 - **Phase 2 (`--evict N`):** previews (or, with `--apply`, actually
-  performs) cutting generation N's `//Generation N` block out of
-  `limine.conf`, then re-checks what additional kernel/initrd files that
-  makes orphaned — accounting for content-hash deduplication, since
-  consecutive generations often share identical kernel builds and only the
-  files that are genuinely no longer used by anything get deleted.
+  performs) removing generation N's boot-menu entry, then re-checks what
+  additional files that makes orphaned — accounting for content-hash
+  deduplication, since consecutive generations often share identical
+  kernel builds and only the files genuinely no longer used by anything
+  get deleted.
+  - *Limine:* cuts generation N's `//Generation N` block out of
+    `limine.conf`.
+  - *systemd-boot:* deletes generation N's own entry file,
+    `nixos-generation-N.conf` — each generation already has its own file
+    there, so this step has no config-parsing to get wrong.
+
   `--evict N --apply` also deletes any Phase 1 orphans first, *before*
-  touching `limine.conf` — since writing the backup and the new config both
-  need a little free space themselves, deleting the zero-risk Phase 1
+  touching the boot-menu config — since writing the backup and the edit
+  both need a little free space themselves, deleting the zero-risk Phase 1
   files first guarantees that room even when `/boot` is already completely
   full (0 bytes free). This is what makes `h` (harvest) in the picker work
   reliably on a fully-out-of-space `/boot` without a separate manual
@@ -231,31 +281,52 @@ limine-gardener rescue --evict 166 --apply
 
 ### Guardrails
 
+Identical on both backends:
+
 - Never proposes evicting the currently-booted generation — and refuses
   outright (rather than proceeding) if it can't determine which generation
   that is, since "unknown" must mean "refuse," not "allow."
 - Never lets the boot menu drop below 2 kept generations (current + at
   least 1 other), even in `--apply` mode, no override.
-- `--apply` backs up `limine.conf` (timestamped, next to the original)
-  before writing anything, validates the edit — marker counts, kept-
-  generation count, current generation still present, evicted generation
-  truly gone — and only writes if every check passes.
-- Confirmed on real hardware: after evicting a generation and rebuilding
-  normally, NixOS regenerates `limine.conf` from scratch and correctly
-  self-heals on top of the manual edit (the evicted generation stays gone;
-  the next-oldest kept generation slides in to fill its slot) — the manual
-  edit is a temporary bridge, not a lasting state.
+- `--apply` backs up the affected boot-menu config first (timestamped,
+  next to the original — the whole `limine.conf` on Limine, or just the
+  one entry file on systemd-boot), validates the predicted post-removal
+  state — kept-generation count, current generation still present,
+  evicted generation truly gone — *before* writing anything, and only
+  writes if every check passes.
+- Confirmed on real hardware (Limine): after evicting a generation and
+  rebuilding normally, NixOS regenerates `limine.conf` from scratch and
+  correctly self-heals on top of the manual edit (the evicted generation
+  stays gone; the next-oldest kept generation slides in to fill its slot)
+  — the manual edit is a temporary bridge, not a lasting state. The
+  systemd-boot backend follows the same design (deleting one entry file is
+  even less invasive than editing a shared config) but hasn't yet been
+  confirmed against a real reboot the way the Limine path has — see
+  [Caveats](#caveats).
 
 ---
 
 ## Requirements
 
-- NixOS with Limine as the bootloader
+- NixOS with Limine or systemd-boot as the bootloader
 - `jq`, `fzf` (provided automatically if run via `nix run`)
-- `sudo` access (for reading `/boot/limine/limine.conf`, and for
+- `sudo` access (for reading the boot-menu config, and for
   `limine-gardener rescue --apply`'s file operations)
 
 ## Caveats
+
+- **systemd-boot support is newer and less battle-tested than the Limine
+  path.** The Limine backend has been validated end-to-end on real
+  hardware, including real reboots after eviction (see
+  [Guardrails](#guardrails) above). The systemd-boot backend was built to
+  the same design and guardrails and passes the same scenarios in a
+  simulated `/boot`, but hasn't yet had that same real-machine, real-reboot
+  confirmation. Try `rescue` (without `--apply`) and `--evict N` (still
+  without `--apply`) first to sanity-check its report against what you
+  actually expect before trusting `--apply`.
+- **Pinning doesn't exist on systemd-boot yet** — see
+  [Bootloader support](#bootloader-support) above. `d`/`h`/`g` are
+  unaffected.
 
 - If a generation's store paths have already been garbage-collected
   (`nix-collect-garbage -d`), `limine-gardener` can't pin it — the files

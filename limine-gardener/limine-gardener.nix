@@ -3,7 +3,7 @@
 
 stdenvNoCC.mkDerivation {
   pname = "limine-gardener";
-  version = "1.3.0";
+  version = "1.4.0";
 
   src = ./.;
 
@@ -12,6 +12,7 @@ stdenvNoCC.mkDerivation {
 
   installPhase = ''
     mkdir -p $out/bin $out/libexec/limine-gardener
+    install -m755 boot-backend.sh $out/libexec/limine-gardener/boot-backend.sh
     install -m755 limine-pin-picker.sh $out/libexec/limine-gardener/limine-pin-picker.sh
     install -m755 limine-boot-rescue.sh $out/libexec/limine-gardener/limine-boot-rescue.sh
     install -m755 limine-gardener $out/bin/limine-gardener
@@ -21,7 +22,7 @@ stdenvNoCC.mkDerivation {
   '';
 
   meta = with lib; {
-    description = "Pick, pin, prune, harvest, or garbage-collect NixOS generations in your Limine boot menu, or rescue a full /boot partition";
+    description = "Pick, pin, prune, harvest, or garbage-collect NixOS generations in your Limine or systemd-boot boot menu, or rescue a full /boot partition";
     platforms = platforms.linux;
     mainProgram = "limine-gardener";
   };

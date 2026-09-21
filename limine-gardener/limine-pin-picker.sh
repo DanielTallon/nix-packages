@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# limine-pin-picker — browse NixOS generations and pin one to the Limine
+# limine-pin-picker — browse NixOS generations, and pin one to the Limine
 # bootloader via a small generated JSON file, consumed by
 # limine-manual-pins.nix (custom.limineManualPins = builtins.fromJSON
 # (builtins.readFile ./limine-pins.json);).
@@ -11,8 +11,8 @@
 #
 # The exceptions are 'd' (prune), 'h' (harvest), and 'g' (garbage-collect)
 # at the generation list. 'd' and 'h' are opposite ends of removing a
-# generation, gated on whether it's currently in the Limine boot menu: 'd'
-# only works on generations NOT in the boot menu (plain
+# generation, gated on whether it's currently in the boot menu: 'd' only
+# works on generations NOT in the boot menu (plain
 # 'nix-env -p .../system --delete-generations') and 'h' only works on
 # generations THAT ARE in the boot menu (shells out to the sibling
 # limine-boot-rescue.sh --evict GEN --apply, which owns all the real work
@@ -22,31 +22,50 @@
 # collection for anything left over from nix-shell/nix develop sessions or
 # stray build results. None of the three touch the generation list itself
 # or any file this tool doesn't already document.
+#
+# Bootloader (Limine or systemd-boot) is auto-detected from what's on
+# /boot; pass --bootloader to override. 'd'/'h'/'g' work the same on
+# either. Pinning ('Enter') is Limine-only for now — it writes Nix-level
+# config consumed by limine-manual-pins.nix, which has no systemd-boot
+# equivalent yet — so on systemd-boot, Enter explains this and does
+# nothing else.
 set -euo pipefail
 
 OUTPUT="limine-pins.json"
 ACTION="add"
 REMOVE_NAME=""
+BOOTLOADER_OVERRIDE=""
 
 SELF="$(readlink -f "${BASH_SOURCE[0]}")"
 RESCUE_SCRIPT="$(dirname "$SELF")/limine-boot-rescue.sh"
+# shellcheck source=./boot-backend.sh
+source "$(dirname "$SELF")/boot-backend.sh"
 
 usage() {
   cat <<'EOF'
-limine-pin-picker — browse NixOS generations and pin one to Limine
+limine-pin-picker — browse NixOS generations, and pin one to Limine
 
 Usage:
   limine-pin-picker                 Interactively pick a generation --
-                                     Enter to pin it, 'd' to prune a
-                                     non-bootloader generation, 'h' to
-                                     harvest a bootloader generation (Tab
-                                     to select several first for 'd'/'h'),
-                                     'g' to garbage-collect (no selection
-                                     needed), '?' to toggle this help
+                                     Enter to pin it (Limine only), 'd' to
+                                     prune a non-bootloader generation, 'h'
+                                     to harvest a bootloader generation
+                                     (Tab to select several first for
+                                     'd'/'h'), 'g' to garbage-collect (no
+                                     selection needed), '?' to toggle this
+                                     help
   limine-pin-picker --list          List currently pinned entries
   limine-pin-picker --remove NAME   Remove a pinned entry by name
   limine-pin-picker --output FILE   Use a different pins file (default: ./limine-pins.json)
+  limine-pin-picker --bootloader limine|systemd-boot
+                                     Skip auto-detection and use this backend
   limine-pin-picker --help          Show this help
+
+Bootloader (Limine or systemd-boot) is auto-detected from what's on /boot.
+'d'/'h'/'g' work the same on either. Pinning ('Enter') is Limine-only for
+now -- it writes Nix-level config consumed by limine-manual-pins.nix,
+which has no systemd-boot equivalent yet -- so on systemd-boot, Enter
+explains this and does nothing else.
 
 The pins file is always fully rewritten (never patched in place) and kept
 sorted by name, so it stays clean and diffable in git.
@@ -60,31 +79,31 @@ cleanup, not a per-generation action.
 'd' (prune) and 'h' (harvest) are opposite ends of removing a generation,
 and each only works on the kind of generation the other doesn't:
 
-  - 'd' only works on a generation that is NOT currently in the Limine
-    boot menu. It just deletes that generation from the NixOS system
+  - 'd' only works on a generation that is NOT currently in the boot
+    menu. It just deletes that generation from the NixOS system
     profile (nix-env -p .../system --delete-generations) -- it doesn't
-    touch /boot or limine.conf at all, so the space isn't reclaimed until
-    your next garbage collection ('g'). Pressing 'd' on a generation that
-    IS in the boot menu refuses with a message telling you to harvest it
+    touch /boot at all, so the space isn't reclaimed until your next
+    garbage collection ('g'). Pressing 'd' on a generation that IS in
+    the boot menu refuses with a message telling you to harvest it
     instead.
 
-  - 'h' only works on a generation that IS currently in the Limine boot
+  - 'h' only works on a generation that IS currently in the boot
     menu. It runs 'limine-boot-rescue --evict GEN --apply' on it directly
-    -- removes the generation's menu entry from limine.conf *and* deletes
-    the /boot files that entry orphans, immediately reclaiming that space
+    -- removes the generation's boot-menu entry *and* deletes the /boot
+    files that entry orphans, immediately reclaiming that space
     (rather than waiting on a GC + rebuild). Same guardrails as running
     rescue by hand: refuses the currently-booted generation, refuses to
-    drop below 2 kept generations, backs up limine.conf first, and
-    requires typed confirmation. Pressing 'h' on a generation that is NOT
-    in the boot menu refuses with a message telling you to prune it
-    instead.
+    drop below 2 kept generations, backs up the affected boot-menu config
+    first, and requires typed confirmation. Pressing 'h' on a generation
+    that is NOT in the boot menu refuses with a message telling you to
+    prune it instead.
 
 'g' garbage-collects leftovers that aren't tied to any one generation: it
 reports (then, with confirmation, deletes) orphaned /boot files via
 limine-boot-rescue, and runs plain Nix garbage collection for anything left
 over from nix-shell/nix develop sessions or stray build results, plus
 anything freed up by a prior 'd'. It never deletes a generation from the
-system profile itself and never touches limine.conf.
+system profile itself and never touches the boot-menu config.
 
 'q' or Esc at the generation list quits the tool entirely, as does Ctrl-C
 at any point. 'q' at a follow-up prompt or confirmation (pin, prune,
@@ -122,6 +141,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --output)
       OUTPUT="${2:-}"
+      shift 2
+      ;;
+    --bootloader)
+      BOOTLOADER_OVERRIDE="${2:-}"
       shift 2
       ;;
     --help | -h)
@@ -163,29 +186,35 @@ if [[ "$ACTION" == "remove" ]]; then
 fi
 
 require fzf
-LIMINE_CONF="/boot/limine/limine.conf"
+backend_init "$BOOTLOADER_OVERRIDE"
+# Always pass the resolved bootloader through to the rescue script
+# explicitly, rather than letting it auto-detect a second time -- keeps
+# the picker and rescue in agreement even if an override was given here.
+RESCUE_ARGS=(--bootloader "$BOOTLOADER")
 
 HELP_FILE=$(mktemp)
 trap 'rm -f "$HELP_FILE"' EXIT
-cat >"$HELP_FILE" <<'EOF'
-limine-pin-picker -- key reference
+cat >"$HELP_FILE" <<EOF
+limine-pin-picker -- key reference (bootloader: $BOOTLOADER)
 
   Enter    Pin the highlighted generation (asks for a short name, a menu
            title, and an optional comment). One at a time only.
+           Limine only -- on systemd-boot this explains why and does
+           nothing else.
 
   Tab      Mark the highlighted generation for a multi-select action
            (d or h). Shift-Tab unmarks it.
 
   d        Prune the marked generation(s) -- ONLY works on generations
-           NOT currently in the Limine boot menu. Deletes them from the
-           NixOS system profile; doesn't touch /boot or limine.conf, so
-           run 'g' afterward to reclaim the space. On a generation that
-           IS in the boot menu, refuses and tells you to harvest it
-           instead. Typed confirmation required per generation.
+           NOT currently in the boot menu. Deletes them from the
+           NixOS system profile; doesn't touch /boot, so run 'g'
+           afterward to reclaim the space. On a generation that IS in
+           the boot menu, refuses and tells you to harvest it instead.
+           Typed confirmation required per generation.
 
   h        Harvest the marked generation(s) -- ONLY works on generations
-           currently in the Limine boot menu. Evicts from the boot menu
-           AND deletes the /boot files that entry alone was using,
+           currently in the boot menu. Evicts from the boot menu AND
+           deletes the /boot files that entry alone was using,
            reclaiming the space immediately. Refuses the
            currently-booted generation and refuses to drop below 2 kept
            generations. On a generation that is NOT in the boot menu,
@@ -197,7 +226,7 @@ limine-pin-picker -- key reference
            confirmation, deletes) orphaned /boot files, and runs plain
            Nix garbage collection for nix-shell/nix develop leftovers,
            stray build results, and anything freed up by a prior 'd'.
-           Never touches the system profile or limine.conf.
+           Never touches the system profile or the boot menu config.
 
   ?        Toggle this help.
 
@@ -222,6 +251,14 @@ pin_generation() {
   local GEN="$1" LINK="$2" TARGET="$3"
   local KERNEL_PATH INITRD_PATH INIT_PATH CMDLINE GEN_DATE
   local DEFAULT_NAME DEFAULT_TITLE NAME TITLE COMMENT tmp
+
+  if ! backend_supports_pin; then
+    echo
+    echo "Pinning isn't supported on $BOOTLOADER yet -- it writes Nix-level" >&2
+    echo "config consumed by limine-manual-pins.nix, which has no $BOOTLOADER" >&2
+    echo "equivalent. 'd'/'h'/'g' all work normally here." >&2
+    return 1
+  fi
 
   for f in kernel initrd init; do
     if [[ ! -e "$TARGET/$f" ]]; then
@@ -294,11 +331,11 @@ gc_orphans_and_leftovers() {
   #    report/apply, same as running it by hand with no --evict);
   # 2) plain Nix GC for anything left over from nix-shell/nix develop
   #    sessions or stray build results, which never touches a generation
-  #    or limine.conf at all -- just dead store paths.
+  #    or the boot menu config at all -- just dead store paths.
   echo
-  echo "== Boot orphans (files in /boot/limine/kernels/ referenced by nothing) =="
+  echo "== Boot orphans (files referenced by nothing on the boot menu) =="
   if [[ -x "$RESCUE_SCRIPT" ]]; then
-    "$RESCUE_SCRIPT" || true
+    "$RESCUE_SCRIPT" "${RESCUE_ARGS[@]}" || true
   else
     echo "  (limine-boot-rescue.sh not found alongside this script -- skipping)" >&2
   fi
@@ -318,7 +355,7 @@ gc_orphans_and_leftovers() {
   if [[ -x "$RESCUE_SCRIPT" ]]; then
     echo
     echo "Deleting boot orphans (limine-boot-rescue --apply -- its own confirmation follows)..."
-    "$RESCUE_SCRIPT" --apply || echo "Note: boot-orphan cleanup was cancelled or found nothing to do -- continuing." >&2
+    "$RESCUE_SCRIPT" "${RESCUE_ARGS[@]}" --apply || echo "Note: boot-orphan cleanup was cancelled or found nothing to do -- continuing." >&2
   fi
 
   echo
@@ -327,8 +364,8 @@ gc_orphans_and_leftovers() {
   nix-collect-garbage
 
   echo
-  echo "Done. This never touched the system profile or limine.conf -- generations"
-  echo "and pins are exactly as they were."
+  echo "Done. This never touched the system profile or the boot-menu config --"
+  echo "generations and pins are exactly as they were."
 }
 
 prune_generation() {
@@ -351,7 +388,7 @@ prune_generation() {
 
   echo
   echo "Pruning generation $GEN: deleting it from the NixOS system profile."
-  echo "(This does not touch /boot or limine.conf -- it just makes the"
+  echo "(This does not touch /boot -- it just makes the"
   echo "generation eligible for garbage collection. Run 'g' afterward to"
   echo "actually reclaim the space.)"
   echo
@@ -372,7 +409,7 @@ harvest_generation() {
   local GEN="$1"
 
   echo
-  echo "Harvesting generation $GEN: evicting it from the Limine boot menu and"
+  echo "Harvesting generation $GEN: evicting it from the boot menu and"
   echo "reclaiming the /boot space it alone was using."
   echo "(This runs 'limine-boot-rescue --evict $GEN --apply' -- see its own"
   echo "confirmation prompts below for exactly what that does. 'q' there just"
@@ -388,7 +425,7 @@ harvest_generation() {
   # Run as a normal child process (not exec) so control returns to the
   # picker's menu loop afterward, whether this succeeds, is refused by
   # rescue's own guardrails, or is cancelled at one of its prompts.
-  if "$RESCUE_SCRIPT" --evict "$GEN" --apply; then
+  if "$RESCUE_SCRIPT" "${RESCUE_ARGS[@]}" --evict "$GEN" --apply; then
     return 0
   else
     echo "Harvest of generation $GEN did not complete (cancelled or refused) -- back to the picker." >&2
@@ -409,33 +446,12 @@ while true; do
   declare -A IN_BOOTLOADER=()
   BOOT_COUNT=0
 
-  LIMINE_CONF_CONTENT=""
-  if [[ -r "$LIMINE_CONF" ]]; then
-    LIMINE_CONF_CONTENT=$(cat "$LIMINE_CONF")
-  elif command -v sudo >/dev/null 2>&1; then
-    # -r (and -e) can silently report "false" here even when the file exists,
-    # if a parent directory (e.g. /boot or /boot/limine) isn't traversable by
-    # a non-root user -- so we always attempt sudo rather than gating on -e.
-    # Capture stderr too so a failed/expired sudo prompt is visible instead of
-    # silently looking like "0 generations in bootloader".
-    if ! LIMINE_CONF_CONTENT=$(sudo cat "$LIMINE_CONF" 2>&1); then
-      echo "Note: couldn't read $LIMINE_CONF as root:" >&2
-      echo "  $LIMINE_CONF_CONTENT" >&2
-      echo "  Bootloader-in-use markers will be unavailable this run." >&2
-      LIMINE_CONF_CONTENT=""
+  while read -r bgen; do
+    if [[ -n "$bgen" ]]; then
+      IN_BOOTLOADER["$bgen"]=1
+      BOOT_COUNT=$((BOOT_COUNT + 1))
     fi
-  else
-    echo "Note: $LIMINE_CONF isn't readable and 'sudo' isn't available -- bootloader-in-use markers will be unavailable this run." >&2
-  fi
-
-  if [[ -n "$LIMINE_CONF_CONTENT" ]]; then
-    while read -r bgen; do
-      if [[ -n "$bgen" ]]; then
-        IN_BOOTLOADER["$bgen"]=1
-        BOOT_COUNT=$((BOOT_COUNT + 1))
-      fi
-    done < <(grep -oE '^//\+?Generation [0-9]+' <<<"$LIMINE_CONF_CONTENT" | grep -oE '[0-9]+' || true)
-  fi
+  done < <(backend_kept_generations_lenient)
 
   shopt -s nullglob
   LINKS=(/nix/var/nix/profiles/system-*-link)
@@ -477,8 +493,10 @@ while true; do
 
   BODY=$(printf '%s\n' "${ROWS[@]}" | sort -t $'\t' -k1,1nr)
 
-  HEADER_TEXT="NixOS Generations (${#ROWS[@]} total, ${BOOT_COUNT} in bootloader)"
-  FOOTER_TEXT="  q/Esc:quit   Enter:pin   Tab:multi-select   d:prune   h:harvest   g:gc   ?:help   ↑↓:move   Type to filter  "
+  HEADER_TEXT="NixOS Generations (${#ROWS[@]} total, ${BOOT_COUNT} in bootloader -- $BOOTLOADER)"
+  ENTER_LABEL="Enter:pin"
+  backend_supports_pin || ENTER_LABEL="Enter:pin(Limine only)"
+  FOOTER_TEXT="  q/Esc:quit   ${ENTER_LABEL}   Tab:multi-select   d:prune   h:harvest   g:gc   ?:help   ↑↓:move   Type to filter  "
 
   RAW=$(
     {
