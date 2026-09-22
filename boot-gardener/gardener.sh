@@ -522,9 +522,22 @@ require fzf
 # cancelled action, so only 'q'/Esc *at the list itself* (or Ctrl-C, any
 # time) actually exits the tool.
 while true; do
-  CURRENT_SYSTEM=""
-  [[ -e /run/current-system ]] && CURRENT_SYSTEM="$(readlink -f /run/current-system)"
+  # Resolved from the profile HEAD (/nix/var/nix/profiles/system), not by
+  # scanning every system-*-link for a store-path match against
+  # /run/current-system. Two profile generations can legitimately point at
+  # the exact same store path (e.g. re-running switch with no config
+  # changes produces a bit-identical closure under a new generation
+  # number) -- a store-path scan then matches *both*, which previously
+  # showed two rows as "(current)" at once and, worse, left CURRENT_GEN
+  # set to whichever duplicate the loop happened to hit, not necessarily
+  # the one nix itself considers current. The profile head is
+  # unambiguous: it's the one generation number nix-env/nixos-rebuild
+  # call "current", full stop.
   CURRENT_GEN=""
+  if [[ -L /nix/var/nix/profiles/system ]]; then
+    head_link="$(readlink /nix/var/nix/profiles/system 2>/dev/null || true)"
+    CURRENT_GEN=$(basename "$head_link" | sed -E 's/system-([0-9]+)-link/\1/')
+  fi
 
   declare -A IN_BOOTLOADER=()
   BOOT_COUNT=0
@@ -596,7 +609,7 @@ while true; do
     fi
 
     marker=""
-    [[ -n "$CURRENT_SYSTEM" && "$target" == "$CURRENT_SYSTEM" ]] && { marker=" (current)"; CURRENT_GEN="$gen"; }
+    [[ -n "$CURRENT_GEN" && "$gen" == "$CURRENT_GEN" ]] && marker=" (current)"
 
     boot_marker="-"
     [[ -n "${IN_BOOTLOADER[$gen]:-}" ]] && boot_marker="✓"

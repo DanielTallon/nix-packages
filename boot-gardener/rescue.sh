@@ -221,22 +221,32 @@ if [[ ${#PROFILE_LINKS[@]} -eq 0 ]]; then
   exit 1
 fi
 
+# CURRENT_GEN comes from the profile HEAD (/nix/var/nix/profiles/system),
+# not from scanning PROFILE_LINKS for the first store-path match against
+# CURRENT_SYSTEM. Two generations can legitimately share the exact same
+# store path (e.g. re-running switch with no config changes produces a
+# bit-identical closure under a new generation number) -- the old
+# first-match scan would then silently pick whichever duplicate happened
+# to sort first in the glob, which isn't necessarily the one nix itself
+# considers current, and this guardrail exists specifically to protect
+# the real one. CURRENT_SYSTEM is kept only as a sanity check below.
 CURRENT_GEN=""
-for link in "${PROFILE_LINKS[@]}"; do
-  if [[ "$(readlink -f "$link")" == "$CURRENT_SYSTEM" ]]; then
-    CURRENT_GEN=$(basename "$link" | sed -E 's/system-([0-9]+)-link/\1/')
-    break
-  fi
-done
+if [[ -L /nix/var/nix/profiles/system ]]; then
+  head_link="$(readlink /nix/var/nix/profiles/system 2>/dev/null || true)"
+  CURRENT_GEN=$(basename "$head_link" | sed -E 's/system-([0-9]+)-link/\1/')
+fi
+CURRENT_GEN_STORE=""
+[[ -n "$CURRENT_GEN" ]] && CURRENT_GEN_STORE="$(readlink -f "/nix/var/nix/profiles/system" 2>/dev/null || true)"
 
-if [[ -z "$CURRENT_GEN" ]]; then
-  # A booted system with no matching profile link almost always means it was
-  # activated with `nixos-rebuild test` / `switch-to-configuration test`,
-  # which deliberately skips creating a profile generation (and skips the
-  # boot menu) -- so there's genuinely no generation number to protect.
+if [[ -z "$CURRENT_GEN" || "$CURRENT_GEN_STORE" != "$CURRENT_SYSTEM" ]]; then
+  # A booted system whose profile head doesn't resolve, or resolves to a
+  # different store path than what's actually booted, almost always means
+  # it was activated with `nixos-rebuild test` / `switch-to-configuration
+  # test`, which deliberately skips updating the profile (and the boot
+  # menu) -- so there's genuinely no generation number to protect.
   echo "Error: could not determine the currently-booted generation number." >&2
   echo "/run/current-system -> $CURRENT_SYSTEM" >&2
-  echo "...but no /nix/var/nix/profiles/system-*-link points at that same store path." >&2
+  echo "...but /nix/var/nix/profiles/system doesn't resolve to that same store path." >&2
   echo >&2
   echo "This usually means the running system was activated with 'nixos-rebuild test'" >&2
   echo "(or 'switch-to-configuration test'), which skips creating a profile generation" >&2
