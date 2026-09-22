@@ -115,6 +115,11 @@ at any point. 'q' at a follow-up prompt or confirmation (pin, prune,
 harvest, gc) only cancels that one action and returns you to the list --
 nothing is written or deleted for it, but the tool keeps running so you can
 pick something else.
+
+Every pin/prune/harvest/gc outcome -- whether it succeeded, was refused by
+a guardrail, or was cancelled -- ends on a "Press Enter to return to the
+list..." pause before the list redraws, so a refusal or error message
+never gets wiped off the screen before you've read it.
 EOF
 }
 
@@ -132,6 +137,20 @@ abort() {
 }
 
 trap abort INT
+
+# Called after every pin/unpin/prune/harvest/gc outcome -- success, refusal,
+# or cancellation alike -- right before the main loop redraws the
+# full-screen generation list. Without this, a message that doesn't already
+# end on its own interactive prompt (most refusals: "generation N is on the
+# bootloader and cannot be pruned", the 2-kept-generation floor, "not a
+# generation -- pins aren't pruned", etc.) gets wiped off the terminal by
+# fzf's next redraw before there's any real chance to read it -- fzf takes
+# over the whole screen again, and nothing before this pause held it still.
+# '|| true' so Ctrl-D (EOF on the read) doesn't trip `set -e`.
+pause_after_action() {
+  echo
+  read -rp "Press Enter to return to the list... " _ || true
+}
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -240,6 +259,10 @@ Gardener -- key reference (bootloader: $BOOTLOADER)
   q / Esc  Quit the tool entirely (as does Ctrl-C, any time). 'q' at a
            prompt or confirmation instead cancels just that one action
            and returns you here.
+
+Every outcome above -- success, refusal, or cancellation -- pauses on
+"Press Enter to return to the list..." before this screen redraws, so
+nothing gets wiped off the terminal before you've read it.
 
 Pinning captures store paths directly, so a pin outlives its source
 generation being pruned/GC'd from the system profile -- that's the point.
@@ -611,6 +634,7 @@ while true; do
     # Global action -- deliberately doesn't require (or care about) a
     # selection, since it isn't tied to any one generation.
     gc_orphans_and_leftovers || true
+    pause_after_action
     continue
   fi
 
@@ -627,6 +651,7 @@ while true; do
         echo
         echo "'${GEN#pin:}' is a pin, not a generation -- pins aren't pruned." >&2
         echo "Select it alone and press Enter to unpin it instead." >&2
+        pause_after_action
         continue
       fi
       # '|| true': prune_generation returns 1 whenever it refuses (in the
@@ -635,6 +660,7 @@ while true; do
       # return to the picker, but a bare non-zero return here would trip
       # `set -e` and kill the whole tool instead.
       prune_generation "$GEN" || true
+      pause_after_action
     done
     continue
   fi
@@ -645,21 +671,24 @@ while true; do
         echo
         echo "'${GEN#pin:}' is a pin, not a generation -- pins aren't harvested." >&2
         echo "Select it alone and press Enter to unpin it instead." >&2
+        pause_after_action
         continue
       fi
       if [[ -z "${IN_BOOTLOADER[$GEN]:-}" ]]; then
         echo
         echo "Generation $GEN is not on the bootloader, so there's nothing to" >&2
         echo "harvest. If you want to remove it, prune it instead ('d')." >&2
+        pause_after_action
         continue
       fi
       # '|| true': harvest_generation returns 1 whenever the rescue script
       # it shells out to exits non-zero -- 'q' at any of rescue's own
-      # confirmations, or one of rescue's own guardrail refusals. That's
-      # meant to abort just this harvest and return to the picker, but a
-      # bare non-zero return here would trip `set -e` and kill the whole
-      # tool instead.
+      # confirmations, or one of rescue's own guardrail refusals (including
+      # the 2-kept-generation floor). That's meant to abort just this
+      # harvest and return to the picker, but a bare non-zero return here
+      # would trip `set -e` and kill the whole tool instead.
       harvest_generation "$GEN" || true
+      pause_after_action
     done
     continue
   fi
@@ -671,12 +700,14 @@ while true; do
     echo "Pin/unpin only supports one row at a time -- you selected ${#SELECTED_GENS[@]}." >&2
     echo "Tab-select multiple generations for prune ('d') or harvest ('h') instead." >&2
     echo
+    pause_after_action
     continue
   fi
   GEN="${SELECTED_GENS[0]}"
 
   if [[ "$GEN" == pin:* ]]; then
     unpin_generation "${GEN#pin:}" || true
+    pause_after_action
     continue
   fi
 
@@ -688,4 +719,5 @@ while true; do
   # return would otherwise kill the whole script instead of just this
   # attempt -- see the same note above harvest_generation's call.
   pin_generation "$GEN" "$LINK" "$TARGET" || true
+  pause_after_action
 done

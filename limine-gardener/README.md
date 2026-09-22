@@ -157,6 +157,12 @@ read; you'll be prompted once, up front).
   only cancels that one action — you're dropped back into the (refreshed)
   generation list rather than the whole tool exiting, so you can
   immediately pick something else.
+- Every pin/prune/harvest/gc outcome — success, refusal (a guardrail
+  message like the 2-kept-generation floor), or cancellation — ends on a
+  `Press Enter to return to the list...` pause before the screen redraws.
+  Without it, a message that doesn't already end on its own confirmation
+  prompt would get wiped off the terminal by the next redraw before
+  there's any real chance to read it.
 
 ### Wiring it into your flake
 
@@ -324,15 +330,14 @@ Identical across all three backends:
   post-removal state — kept-generation count, current generation still
   present, evicted generation truly gone — *before* writing anything, and
   only writes if every check passes.
-- Confirmed on real hardware (Limine, and since also a real systemd-boot
-  VM): after evicting a generation and rebuilding normally, NixOS
+- Confirmed on real hardware (Limine) and, since, real VMs for both other
+  backends: after evicting a generation and rebuilding normally, NixOS
   regenerates the boot-menu config from scratch and correctly self-heals
   on top of the manual edit (the evicted generation stays gone; the
   next-oldest kept generation slides in to fill its slot) — the manual
-  edit is a temporary bridge, not a lasting state. The GRUB backend
-  follows the same design (`grub.cfg` is fully regenerated from the
-  current generation list on every rebuild too, same as `limine.conf`)
-  but hasn't yet been confirmed against a real GRUB system at all — see
+  edit is a temporary bridge, not a lasting state. On a real GRUB VM,
+  harvesting two generations down to the 2-kept floor worked cleanly and
+  the guardrail correctly refused going any lower — see
   [Caveats](#caveats).
 
 ---
@@ -347,17 +352,18 @@ Identical across all three backends:
 ## Caveats
 
 - **systemd-boot and GRUB support are newer and less battle-tested than the
-  Limine path.** The Limine backend has been validated end-to-end on real
-  hardware, including real reboots after eviction (see
-  [Guardrails](#guardrails) above). The systemd-boot backend was built to
-  the same design and guardrails, passed the same scenarios in a simulated
-  `/boot`, and has since been confirmed on a real systemd-boot VM (harvest
-  correctly detected real `/boot/loader/entries/` entries and evicted
-  cleanly, guardrails held). The GRUB backend is built to the same design
-  and guardrails too, but hasn't yet been run against a real GRUB system
-  at all — try `rescue` (without `--apply`) and `--evict N` (still without
-  `--apply`) first to sanity-check its report against what you actually
-  expect before trusting `--apply`.
+  Limine path**, which is still the only one confirmed across a real
+  reboot after eviction (see [Guardrails](#guardrails) above) — both
+  backends have been through the same design/guardrail scenarios in a
+  simulated `/boot` plus a real VM, but not yet a real reboot afterward.
+  The systemd-boot backend was confirmed on a real systemd-boot VM
+  (harvest correctly detected real `/boot/loader/entries/` entries and
+  evicted cleanly, guardrails held). The GRUB backend was confirmed on a
+  real GRUB VM the same way (harvested two generations down to the
+  2-kept floor, which then correctly refused a third). Still worth
+  running `rescue` (without `--apply`) and `--evict N` (still without
+  `--apply`) first on a new machine to sanity-check the report against
+  what you actually expect before trusting `--apply`.
 - **Pinning doesn't exist on systemd-boot or GRUB yet** — see
   [Bootloader support](#bootloader-support) above. `d`/`h`/`g` are
   unaffected.
