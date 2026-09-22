@@ -94,7 +94,9 @@ The list shows generation number, date, NixOS/kernel version, and a `BOOT`
 column marking which generations are currently referenced in your boot
 menu (reading `/boot/limine/limine.conf` on Limine, `/boot/loader/entries/`
 on systemd-boot, or `/boot/grub/grub.cfg` on GRUB — all need `sudo` to
-read; you'll be prompted once, up front).
+read; you'll be prompted once, up front). A second header line shows
+`/boot`'s used/free space and percent-full (`df -h /boot`, no `sudo`
+needed), recomputed on every redraw so it reflects `p`/`h`/`g` immediately.
 
 - **Tab** marks a generation for a multi-select action without leaving the
   list; **Shift-Tab** unmarks one. Marking generations only matters for
@@ -374,3 +376,14 @@ Identical across all three backends:
 - Pinned entries reference `/nix/store` paths directly (plus, per above,
   their entire transitive closure). If you GC aggressively, consider
   rooting a pinned generation if you want its paths to reliably survive.
+- **Observed once, not reproduced or root-caused:** on a fresh GRUB VM
+  test session, KDE's admin-mode save prompt (Kate editing
+  `/etc/nixos/configuration.nix` via KAuth/`pkexec`) flashed on screen for
+  only a second or two and vanished before a password could be entered;
+  editing the same file with `sudoedit`/`nano` in a terminal worked fine,
+  and Kate's admin save worked normally again after a reboot. Nothing in
+  `boot-gardener`/`rescue.sh` touches PolicyKit, KAuth, or Kate's own auth
+  path (they only call `sudo` directly for their own reads/writes), so
+  this doesn't look like a `boot-gardener` bug — more likely a KDE
+  polkit-agent hiccup that happened to show up mid-session. Noted here in
+  case it recurs; no fix attempted.
