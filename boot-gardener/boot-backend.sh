@@ -21,7 +21,11 @@
 #       Prints a newline list of generation numbers currently on the boot
 #       menu. Never exits on a read failure -- prints a "Note:" to stderr
 #       and prints nothing, for callers (the picker's live BOOT column)
-#       that can tolerate partial information.
+#       that can tolerate partial information. Its own return status still
+#       tells the caller whether the read worked (0) or failed (1) -- a
+#       failed read is NOT the same thing as a confirmed-empty boot menu,
+#       and callers must check this rather than treating empty output as
+#       "zero generations in the boot menu."
 #
 #   backend_kept_generations_strict
 #       Same, but exits the whole script on a read failure. For callers
@@ -326,23 +330,36 @@ _kept_generations_grub() {
 }
 
 backend_kept_generations_lenient() {
+  # Unlike the helpers it calls, THIS function's own return status is
+  # meaningful and must stay that way: 0 means "the read succeeded, the
+  # printed list (possibly empty) is trustworthy"; 1 means "couldn't read
+  # the boot menu at all" (try_read_root_file/try_list_root_dir already
+  # printed a "Note:" to stderr explaining why). Callers MUST treat those
+  # two cases differently -- a failed read must never be presented as a
+  # confirmed-empty boot menu, since that silently makes every generation
+  # look prunable and every harvest look refused. The trailing `return 0`
+  # is deliberate: it decouples this function's success/failure signal
+  # from whatever exit status the underlying _kept_generations_* parser
+  # happens to return (that's about its own internal read-loop mechanics,
+  # not about whether the read itself succeeded).
   case "$BOOTLOADER" in
     limine)
       local content
-      content=$(try_read_root_file "$LIMINE_CONF") || return 0
+      content=$(try_read_root_file "$LIMINE_CONF") || return 1
       _kept_generations_limine "$content"
       ;;
     systemd-boot)
       local listing
-      listing=$(try_list_root_dir "$SYSTEMD_BOOT_ENTRIES_DIR" '*.conf') || return 0
+      listing=$(try_list_root_dir "$SYSTEMD_BOOT_ENTRIES_DIR" '*.conf') || return 1
       _kept_generations_systemd_boot "$listing"
       ;;
     grub)
       local content
-      content=$(try_read_root_file "$GRUB_CONF") || return 0
+      content=$(try_read_root_file "$GRUB_CONF") || return 1
       _kept_generations_grub "$content"
       ;;
   esac
+  return 0
 }
 
 backend_kept_generations_strict() {

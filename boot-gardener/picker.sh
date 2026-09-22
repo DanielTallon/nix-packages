@@ -529,12 +529,42 @@ while true; do
   declare -A IN_BOOTLOADER=()
   BOOT_COUNT=0
 
+  # Captured into a variable (rather than the previous
+  # `< <(backend_kept_generations_lenient)`) specifically so its exit
+  # status is checkable -- process substitution silently discards a
+  # command's exit status, which previously meant a failed boot-menu read
+  # was indistinguishable from a genuinely empty one: every generation
+  # would look not-in-bootloader with no indication anything went wrong.
+  BOOT_READ_OK=1
+  BOOT_LIST=""
+  BOOT_LIST=$(backend_kept_generations_lenient) || BOOT_READ_OK=0
+
   while read -r bgen; do
     if [[ -n "$bgen" ]]; then
       IN_BOOTLOADER["$bgen"]=1
       BOOT_COUNT=$((BOOT_COUNT + 1))
     fi
-  done < <(backend_kept_generations_lenient)
+  done <<<"$BOOT_LIST"
+
+  # Surface a failed read loudly, and PAUSE for it -- same reasoning as
+  # pause_after_action (see its comment above): a message printed right
+  # before fzf redraws the full-screen list gets wiped before there's any
+  # real chance to read it. Without this pause, a failed read here just
+  # silently presents as "0 in bootloader", which looks identical to a
+  # genuinely empty boot menu but makes every generation look safe to
+  # prune ('p') and makes harvest ('h') refuse everything.
+  if [[ "$BOOT_READ_OK" -eq 0 ]]; then
+    echo
+    echo "⚠️  Could not read the boot menu -- see the 'Note:' above for why" >&2
+    echo "   (usually a permissions problem reading under /boot, or a sudo" >&2
+    echo "   prompt that didn't go through). The '0 in bootloader' you're" >&2
+    echo "   about to see is NOT a confirmed-empty boot menu -- it's an" >&2
+    echo "   UNREADABLE one. Until this is fixed:" >&2
+    echo "     - every generation will look prunable ('p'), even ones that" >&2
+    echo "       are really still on the boot menu" >&2
+    echo "     - 'h' (harvest) will refuse every generation" >&2
+    pause_after_action
+  fi
 
   shopt -s nullglob
   LINKS=(/nix/var/nix/profiles/system-*-link)
