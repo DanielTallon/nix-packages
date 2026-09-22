@@ -5,7 +5,7 @@ use and shared here in case they're useful to anyone else:
 
 - **[`lgl-papercutter`](./lgl-papercutter)** — [LGL Papercutter](https://github.com/linuxgamerlife/lgl-papercutter), a Qt6/ImageMagick wallpaper editor for Linux. Pinned to `v0.3.0`, MIT licensed.
 - **[`kenku-fm`](./kenku-fm)** — [Kenku FM](https://www.kenku.fm/), an offline-capable text-to-speech and soundboard app for tabletop audio. Built from upstream's `.deb` release. You can check out their GitHub [here](https://github.com/owlbear-rodeo/kenku-fm). Kenku-FM is proprietary/unfree.
-- **[`limine-gardener`](https://github.com/DanielTallon/nix-packages/blob/main/limine-gardener)** — Limine Gardener, a bash (`jq` + `fzf`) tool for NixOS + Limine to pick, pin, or prune boot-menu generations, plus a rescue mode for a full `/boot` partition, called `harvest`. Own project, MIT licensed.
+- **[`boot-gardener`](https://github.com/DanielTallon/nix-packages/blob/main/boot-gardener)** — Boot Gardener, a bash (`jq` + `fzf`) tool for NixOS to pick, pin, prune, harvest, or garbage-collect boot-menu generations on Limine, systemd-boot, or GRUB, plus a rescue mode for a full `/boot` partition. Own project, MIT licensed.
 
 Each package is exposed on its own — installing or building one never pulls in the other.
 
@@ -15,7 +15,7 @@ Each package is exposed on its own — installing or building one never pulls in
 ```sh
 nix run github:DanielTallon/nix-packages#lgl-papercutter
 nix run github:DanielTallon/nix-packages#kenku-fm
-nix run github:DanielTallon/nix-packages#limine-gardener
+nix run github:DanielTallon/nix-packages#boot-gardener
 ```
 
 **Install one:**
@@ -26,7 +26,7 @@ nix profile install github:DanielTallon/nix-packages#kenku-fm
 **As a flake input, per-package:**
 ```nix
 inputs.nix-packages.url = "github:DanielTallon/nix-packages";
-inputs.nix-packages.packages.${pkgs.stdenv.hostPlatform.system}.limine-gardener
+inputs.nix-packages.packages.${pkgs.stdenv.hostPlatform.system}.boot-gardener
 
 
 # then reference, e.g. in a NixOS or home-manager module:
@@ -38,7 +38,7 @@ inputs.nix-packages.packages.${pkgs.stdenv.hostPlatform.system}.kenku-fm
 inputs.nix-packages.url = "github:DanielTallon/nix-packages";
 
 nixpkgs.overlays = [ inputs.nix-packages.overlays.default ];
-# now available anywhere in your config as pkgs.lgl-papercutter / pkgs.kenku-fm / pkgs.limine-gardener
+# now available anywhere in your config as pkgs.lgl-papercutter / pkgs.kenku-fm / pkgs.boot-gardener
 ```
 
 ## A note on `kenku-fm`
@@ -63,7 +63,7 @@ wrong string).
 `got:` value from the error into `hash`/`sha256`.
 4. Rebuild, confirm it runs, commit.
 
-`limine-gardener` is my own script with no upstream to track, so this
+`boot-gardener` is my own script with no upstream to track, so this
 doesn't apply — just check back here to get the updated `version`. If you
 have it as a flake input, `nix flake update` (or `nix flake lock
 --update-input nix-packages`) pulls in whatever's on `main`.
@@ -77,8 +77,8 @@ nix-packages/
 │   └── lgl-papercutter.nix
 ├── kenku-fm/
 │   └── kenku-fm.nix
-└── limine-gardener/
-    └── limine-gardener.nix
+└── boot-gardener/
+    └── boot-gardener.nix
 ```
 
 ## License

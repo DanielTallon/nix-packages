@@ -1,5 +1,5 @@
-# boot-backend.sh — bootloader abstraction shared by limine-pin-picker.sh
-# and limine-boot-rescue.sh. Meant to be sourced, never executed directly.
+# boot-backend.sh — bootloader abstraction shared by picker.sh
+# and rescue.sh. Meant to be sourced, never executed directly.
 #
 # Supports three backends: "limine", "systemd-boot", and "grub". Detection
 # is automatic (based on which marker file exists under /boot) unless

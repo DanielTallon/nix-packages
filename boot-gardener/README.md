@@ -1,4 +1,4 @@
-# Limine Gardener
+# Boot Gardener
 
 Pick a NixOS generation, then **pin** it to keep it bootable, **prune** it
 if it's not currently in the boot menu, or **harvest** it to evict it from
@@ -10,12 +10,12 @@ can't even run.
 
 Two scripts under one command:
 
-- **`limine-gardener`** — browse your system generations and pin one to the
+- **`boot-gardener`** — browse your system generations and pin one to the
   boot menu (bypassing `maxGenerations` garbage collection), prune one that
   isn't in the boot menu, harvest one that is (evict + reclaim its `/boot`
   space on the spot), or garbage-collect boot orphans and nix-shell/nix
   develop leftovers, from a single screen.
-- **`limine-gardener rescue`** — diagnose and, if needed, fix a `/boot`
+- **`boot-gardener rescue`** — diagnose and, if needed, fix a `/boot`
   partition that's full or close to it, by finding and safely removing
   files a normal rebuild can't reach because it doesn't have room to run.
 
@@ -29,7 +29,7 @@ and copies files into `/boot`.
 | | Limine | systemd-boot | GRUB |
 |---|---|---|---|
 | Pick, prune, harvest, garbage-collect | ✅ | ✅ | ✅ |
-| Rescue mode (`limine-gardener rescue`) | ✅ | ✅ | ✅ |
+| Rescue mode (`boot-gardener rescue`) | ✅ | ✅ | ✅ |
 | Pin (`Enter`) | ✅ | ❌ (see below) | ❌ (see below) |
 
 The bootloader is auto-detected from what's on `/boot` (presence of
@@ -71,23 +71,23 @@ else; prune/harvest/GC all work exactly the same on all three.
 ### Usage
 
 ```bash
-# Interactively pick a generation. Enter pins it, 'd' prunes it (if not on
+# Interactively pick a generation. Enter pins it, 'p' prunes it (if not on
 # the bootloader), 'h' harvests it (if on the bootloader), 'g'
 # garbage-collects.
-nix run github:DanielTallon/nix-packages#limine-gardener
+nix run github:DanielTallon/nix-packages#boot-gardener
 
 # Or run it directly:
-limine-gardener --output ~/.dotfiles/limine-pins.json
+boot-gardener --output ~/.dotfiles/limine-pins.json
 
 # List what's currently pinned
-limine-gardener --list
+boot-gardener --list
 
 # Remove a pin by its name (or select its 📌 row in the interactive list
 # and press Enter instead)
-limine-gardener --remove gen-144
+boot-gardener --remove gen-144
 
 # Skip bootloader auto-detection
-limine-gardener --bootloader systemd-boot
+boot-gardener --bootloader systemd-boot
 ```
 
 The list shows generation number, date, NixOS/kernel version, and a `BOOT`
@@ -98,7 +98,7 @@ read; you'll be prompted once, up front).
 
 - **Tab** marks a generation for a multi-select action without leaving the
   list; **Shift-Tab** unmarks one. Marking generations only matters for
-  `d`/`h` below — pin/unpin always applies to a single row, and `g` ignores
+  `p`/`h` below — pin/unpin always applies to a single row, and `g` ignores
   selection entirely.
 - Pin rows (📌) are listed alongside generation rows, and stick around even
   after their source generation is pruned/GC'd from the system profile —
@@ -117,11 +117,11 @@ read; you'll be prompted once, up front).
   `limine-pins.json`, then offers to rebuild on the spot (`nh os switch .
   -- --impure` if other pins remain, plain `nh os switch .` if that was the
   last one) — same "type something else to skip" convention as pinning.
-- **`d`** and **`h`** are opposite ends of removing a generation, and each
+- **`p`** and **`h`** are opposite ends of removing a generation, and each
   only works on the kind of generation the other doesn't — the `BOOT`
   column tells you which is which. Both work identically across all three
   backends:
-  - **`d`** **prunes** the selected generation(s) — only works on ones
+  - **`p`** **prunes** the selected generation(s) — only works on ones
     **not** currently in the boot menu. Deletes them from the NixOS system
     profile (`nix-env -p .../system --delete-generations`); doesn't touch
     `/boot` at all, so the space isn't reclaimed until your next `g`.
@@ -129,7 +129,7 @@ read; you'll be prompted once, up front).
     pointing you at `h` instead. Typed `yes` confirmation per generation.
   - **`h`** **harvests** the selected generation(s) — only works on ones
     **that are** currently in the boot menu. For each one, hands off to
-    `limine-gardener rescue --evict GEN --apply`, which removes its
+    `boot-gardener rescue --evict GEN --apply`, which removes its
     boot-menu entry *and* deletes the `/boot` files that entry alone was
     using — reclaiming the space immediately rather than waiting on a
     later GC + rebuild. It inherits every guardrail `rescue` already has:
@@ -137,14 +137,14 @@ read; you'll be prompted once, up front).
     generations, backs up the affected boot-menu config before touching
     it, and needs typed confirmation per generation. Picking a generation
     that is *not* in the boot menu refuses with a message pointing you at
-    `d` instead. See [Rescue mode](#rescue-mode) below for exactly what
+    `p` instead. See [Rescue mode](#rescue-mode) below for exactly what
     that confirmation flow looks like.
 - **`g`** **garbage-collects** — a global action, independent of whatever's
   highlighted or marked. It reports orphaned `/boot` files the same way
-  `limine-gardener rescue` does (Phase 1: files referenced by no current
+  `boot-gardener rescue` does (Phase 1: files referenced by no current
   boot-menu entry), then reports dead Nix store paths (`nix-store --gc
   --print-dead`) — the usual home of nix-shell/nix develop leftovers, stray
-  build results, and anything freed up by a prior `d`. One `[yes/N]`
+  build results, and anything freed up by a prior `p`. One `[yes/N]`
   confirmation runs both cleanups for real: the `/boot` orphans are deleted
   via `rescue --apply` (its own guardrails and confirmation still apply),
   then `nix-collect-garbage` runs. It never deletes a generation from the
@@ -249,20 +249,20 @@ files in `/boot` are only rewritten by a *successful* rebuild.
 
 ```bash
 # Report only -- never changes anything
-limine-gardener rescue
+boot-gardener rescue
 
 # Also preview evicting a specific kept generation's menu entry
-limine-gardener rescue --evict 166
+boot-gardener rescue --evict 166
 
 # Actually delete Phase 1 orphaned files (typed confirmation required)
-limine-gardener rescue --apply
+boot-gardener rescue --apply
 
 # Actually evict a generation and delete its now-orphaned files
 # (types the generation number back, then 'yes', to confirm)
-limine-gardener rescue --evict 166 --apply
+boot-gardener rescue --evict 166 --apply
 
 # Skip bootloader auto-detection
-limine-gardener rescue --bootloader grub
+boot-gardener rescue --bootloader grub
 ```
 
 ### How it works
@@ -347,7 +347,7 @@ Identical across all three backends:
 - NixOS with Limine, systemd-boot, or GRUB as the bootloader
 - `jq`, `fzf` (provided automatically if run via `nix run`)
 - `sudo` access (for reading the boot-menu config, and for
-  `limine-gardener rescue --apply`'s file operations)
+  `boot-gardener rescue --apply`'s file operations)
 
 ## Caveats
 
@@ -365,11 +365,11 @@ Identical across all three backends:
   `--apply`) first on a new machine to sanity-check the report against
   what you actually expect before trusting `--apply`.
 - **Pinning doesn't exist on systemd-boot or GRUB yet** — see
-  [Bootloader support](#bootloader-support) above. `d`/`h`/`g` are
+  [Bootloader support](#bootloader-support) above. `p`/`h`/`g` are
   unaffected.
 
 - If a generation's store paths have already been garbage-collected
-  (`nix-collect-garbage -d`), `limine-gardener` can't pin it — the files
+  (`nix-collect-garbage -d`), `boot-gardener` can't pin it — the files
   simply aren't there anymore.
 - Pinned entries reference `/nix/store` paths directly (plus, per above,
   their entire transitive closure). If you GC aggressively, consider

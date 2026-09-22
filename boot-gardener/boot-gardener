@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# boot-gardener — pick, pin, prune, harvest, or garbage-collect NixOS
+# generations in your Limine, systemd-boot, or GRUB boot menu, or `rescue`
+# a /boot partition that's full.
+#
+# Thin dispatcher: forwards to picker.sh by default, or to rescue.sh when
+# the first argument is 'rescue'. Resolves its own installed location at
+# runtime (rather than having Nix bake an absolute path into generated
+# text at build time), so there's nothing here for Nix's
+# string-interpolation rules to trip over.
+set -euo pipefail
+
+# Most terminals (Konsole included) show the running foreground process's
+# comm name as the tab/window title. Since this dispatcher execs straight
+# into picker.sh or rescue.sh, that title would otherwise just show
+# whichever of those got exec'd into -- not very informative. This OSC 0
+# sequence sets an explicit title instead, which takes precedence over
+# that default; guarded on being an actual terminal so it doesn't leak
+# escape codes into piped/redirected output.
+[[ -t 1 ]] && printf '\033]0;Gardener\007'
+
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+LIBEXEC="$(cd "$(dirname "$SELF")/../libexec/boot-gardener" && pwd)"
+
+if [[ "${1:-}" == "rescue" ]]; then
+  shift
+  exec "$LIBEXEC/rescue.sh" "$@"
+else
+  exec "$LIBEXEC/picker.sh" "$@"
+fi

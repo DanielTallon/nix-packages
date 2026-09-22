@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# limine-boot-rescue — diagnostic + rescue tool for a 100%-full /boot on a
+# rescue — diagnostic + rescue tool for a 100%-full /boot on a
 # Limine, systemd-boot, or GRUB + NixOS system.
 #
 # nix-env --delete-generations alone can't free /boot space: the actual
@@ -30,23 +30,23 @@ source "$(dirname "$SELF")/boot-backend.sh"
 
 usage() {
   cat <<'EOF'
-limine-boot-rescue — diagnostic + rescue tool for a full /boot partition
+boot-gardener rescue — diagnostic + rescue tool for a full /boot partition
 
 Usage:
-  limine-boot-rescue                Report orphaned files (referenced by no
+  boot-gardener rescue               Report orphaned files (referenced by no
                                      current boot-menu entry)
-  limine-boot-rescue --evict N      Also preview evicting generation N's
+  boot-gardener rescue --evict N     Also preview evicting generation N's
                                      boot-menu entry, and what additional
                                      files that would orphan
-  limine-boot-rescue --apply        Actually delete Phase 1 orphaned files
+  boot-gardener rescue --apply       Actually delete Phase 1 orphaned files
                                      (requires typed confirmation)
-  limine-boot-rescue --evict N --apply
+  boot-gardener rescue --evict N --apply
                                      Actually evict generation N's boot-menu
                                      entry and delete its now-orphaned files
                                      (requires typed confirmation)
-  limine-boot-rescue --bootloader limine|systemd-boot|grub
+  boot-gardener rescue --bootloader limine|systemd-boot|grub
                                      Skip auto-detection and use this backend
-  limine-boot-rescue --help         Show this help
+  boot-gardener rescue --help        Show this help
 
 Without --apply, this is diagnostic only -- it never deletes files or edits
 the boot menu. --apply always backs up the affected boot-menu config first
@@ -243,7 +243,7 @@ if [[ -z "$CURRENT_GEN" ]]; then
   echo "and skips updating the boot menu -- so there's genuinely nothing to protect it." >&2
   echo >&2
   echo "Fix: run 'nixos-rebuild switch' (or 'nh os switch') to register the current" >&2
-  echo "system as a real generation, then re-run limine-boot-rescue." >&2
+  echo "system as a real generation, then re-run 'boot-gardener rescue'." >&2
   echo >&2
   echo "Refusing to preview any eviction -- can't guarantee the current generation" >&2
   echo "would be protected." >&2

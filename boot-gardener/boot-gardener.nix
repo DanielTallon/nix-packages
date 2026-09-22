@@ -2,8 +2,8 @@
 }:
 
 stdenvNoCC.mkDerivation {
-  pname = "limine-gardener";
-  version = "1.6.1";
+  pname = "boot-gardener";
+  version = "2.0.0";
 
   src = ./.;
 
@@ -11,19 +11,19 @@ stdenvNoCC.mkDerivation {
   dontBuild = true;
 
   installPhase = ''
-    mkdir -p $out/bin $out/libexec/limine-gardener
-    install -m755 boot-backend.sh $out/libexec/limine-gardener/boot-backend.sh
-    install -m755 limine-pin-picker.sh $out/libexec/limine-gardener/limine-pin-picker.sh
-    install -m755 limine-boot-rescue.sh $out/libexec/limine-gardener/limine-boot-rescue.sh
-    install -m755 limine-gardener $out/bin/limine-gardener
+    mkdir -p $out/bin $out/libexec/boot-gardener
+    install -m755 boot-backend.sh $out/libexec/boot-gardener/boot-backend.sh
+    install -m755 picker.sh $out/libexec/boot-gardener/picker.sh
+    install -m755 rescue.sh $out/libexec/boot-gardener/rescue.sh
+    install -m755 boot-gardener $out/bin/boot-gardener
 
-    wrapProgram $out/bin/limine-gardener \
+    wrapProgram $out/bin/boot-gardener \
       --prefix PATH : ${lib.makeBinPath [ jq fzf coreutils gnused gawk util-linux ]}
   '';
 
   meta = with lib; {
     description = "Pick, pin, prune, harvest, or garbage-collect NixOS generations in your Limine, systemd-boot, or GRUB boot menu, or rescue a full /boot partition";
     platforms = platforms.linux;
-    mainProgram = "limine-gardener";
+    mainProgram = "boot-gardener";
   };
 }
