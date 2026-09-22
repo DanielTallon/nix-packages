@@ -1,4 +1,4 @@
-# boot-backend.sh — bootloader abstraction shared by picker.sh
+# boot-backend.sh — bootloader abstraction shared by gardener.sh
 # and rescue.sh. Meant to be sourced, never executed directly.
 #
 # Supports three backends: "limine", "systemd-boot", and "grub". Detection

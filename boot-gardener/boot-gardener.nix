@@ -13,7 +13,7 @@ stdenvNoCC.mkDerivation {
   installPhase = ''
     mkdir -p $out/bin $out/libexec/boot-gardener
     install -m755 boot-backend.sh $out/libexec/boot-gardener/boot-backend.sh
-    install -m755 picker.sh $out/libexec/boot-gardener/picker.sh
+    install -m755 gardener.sh $out/libexec/boot-gardener/gardener.sh
     install -m755 rescue.sh $out/libexec/boot-gardener/rescue.sh
     install -m755 boot-gardener $out/bin/boot-gardener
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# picker — browse NixOS generations, and pin one to the Limine
+# gardener — browse NixOS generations, and pin one to the Limine
 # bootloader via a small generated JSON file, consumed by
 # limine-manual-pins.nix (custom.limineManualPins = builtins.fromJSON
 # (builtins.readFile ./limine-pins.json);).
