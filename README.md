@@ -17,6 +17,13 @@ nix run github:DanielTallon/nix-packages#lgl-papercutter
 nix run github:DanielTallon/nix-packages#kenku-fm
 nix run github:DanielTallon/nix-packages#boot-gardener
 ```
+**Run without installing, and without flakes enabled:**
+```sh
+nix run github:DanielTallon/nix-packages#lgl-papercutter
+nix run --extra-experimental-features "nix-command flakes" github:DanielTallon/nix-packages#lgl-papercutter
+nix run --extra-experimental-features "nix-command flakes" github:DanielTallon/nix-packages#kenku-fm
+nix run --extra-experimental-features "nix-command flakes" github:DanielTallon/nix-packages#boot-gardener   
+```
 
 **Install one:**
 ```sh
