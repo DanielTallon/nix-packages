@@ -329,13 +329,26 @@ Identical across all three backends:
   this tool is for: a `nixos-rebuild boot`/`switch` that dies with `ENOSPC`
   has already advanced the profile head to a new generation that never
   made it onto the boot menu, while you're still running an older one. The
-  picker marks the two separately — `(booted)` and `(profile head)` — and
-  adds a header line when they disagree. Also protected from eviction: the
+  picker marks the booted generation `(booted)` and adds a header line
+  naming the profile head when the two disagree. Also protected from eviction: the
   running generation if you've `switch`ed since booting, the profile head
   (nix-env can't delete it anyway), and any generation with the exact same
   store path as the booted one (on systemd-boot the `LoaderEntrySelected`
   EFI variable pins down which duplicate you really booted; Limine and GRUB
   have no equivalent, so every duplicate is kept).
+- "Booted" and "running" are also different things. **Booted**
+  (`/run/booted-system`) is what the machine started from — fixed until
+  the next reboot, and it's what decides which kernel/initrd are loaded.
+  **Running** (`/run/current-system`) is what's activated right now —
+  `nixos-rebuild switch` (or `test`) changes it without a reboot, moving
+  services, `/etc` and the system path to the new generation while the
+  old kernel stays loaded. They only differ after a `switch` without a
+  reboot; the picker then marks both, e.g. `(running)` on the new
+  generation and `(booted)` on the one you started from, which also tells
+  you at a glance that a reboot is pending. When they're the same
+  generation, only `(booted)` is shown. Both are protected: evicting the
+  booted one could remove the boot entry you came in on, and evicting the
+  running one would delete the system you're actually using.
 - Pruning (`p`) the profile head — typically the generation that filled
   `/boot` — offers to point the profile back at the booted generation first
   (`nix-env --switch-generation`, which only moves the profile symlink;

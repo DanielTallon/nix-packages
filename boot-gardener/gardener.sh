@@ -653,8 +653,6 @@ while true; do
       marker=" (booted)"
     elif [[ -n "$RUNNING_GEN" && "$gen" == "$RUNNING_GEN" ]]; then
       marker=" (running)"
-    elif [[ -n "$HEAD_GEN" && "$gen" == "$HEAD_GEN" ]]; then
-      marker=" (profile head)"
     fi
 
     boot_marker="-"
