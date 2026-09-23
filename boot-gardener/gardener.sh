@@ -645,7 +645,18 @@ while true; do
     } | sort -t $'\t' -k1,1nr
   )
 
+  # /boot fullness, recomputed every redraw since prune/harvest/gc change it
+  # live. Plain `df` on the mountpoint doesn't need the sudo that reading
+  # *into* /boot's contents elsewhere in this script does -- it only stats
+  # the mountpoint itself.
+  BOOT_USAGE=""
+  if boot_df_line=$(df -h --output=used,avail,pcent /boot 2>/dev/null | tail -n1); then
+    read -r boot_used boot_avail boot_pcent <<<"$boot_df_line"
+    [[ -n "$boot_used" ]] && BOOT_USAGE="/boot: ${boot_used} used, ${boot_avail} free (${boot_pcent} full)"
+  fi
+
   HEADER_TEXT="NixOS Generations (${#ROWS[@]} total, ${BOOT_COUNT} in bootloader, ${#PIN_ROWS[@]} pinned -- $BOOTLOADER)"
+  [[ -n "$BOOT_USAGE" ]] && HEADER_TEXT="${HEADER_TEXT}"$'\n'"${BOOT_USAGE}"
   ENTER_LABEL="Enter:pin/unpin"
   backend_supports_pin || ENTER_LABEL="Enter:pin(Limine only)"
   FOOTER_TEXT="  q/Esc:quit   ${ENTER_LABEL}   Tab:multi-select   p:prune   h:harvest   g:gc   ?:help   ↑↓:move   Type to filter  "
