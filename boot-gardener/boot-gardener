@@ -1,26 +1,15 @@
 #!/usr/bin/env bash
 # boot-gardener — pick, pin, prune, harvest, or garbage-collect NixOS
-# generations in your Limine, systemd-boot, or GRUB boot menu, or `rescue`
-# a /boot partition that's full.
+# generations in your Limine, systemd-boot, or GRUB boot menu. Harvest can even
+# work on a /boot partition that's full.
 #
-# Thin dispatcher: forwards to gardener.sh by default, or to rescue.sh when
+# A thin dispatcher forwards to gardener.sh by default, or to rescue.sh when
 # the first argument is 'rescue'. Resolves its own installed location at
 # runtime (rather than having Nix bake an absolute path into generated
 # text at build time), so there's nothing here for Nix's
 # string-interpolation rules to trip over.
 set -euo pipefail
 
-# Most terminals (Konsole included) show the running foreground process's
-# comm name as the tab/window title, and re-derive it dynamically -- an
-# OSC 0 title set here gets overwritten the moment `exec` below replaces
-# this process with gardener.sh/rescue.sh, since that's a genuinely new
-# comm name as far as the terminal's concerned (confirmed: this used to
-# say "picker.sh" in the tab title despite the OSC 0 sequence below, back
-# when the dispatched-to script was still named picker.sh). Keeping this
-# sequence anyway as a fallback for terminals that don't do that
-# re-derivation -- it's harmless either way -- but the real fix is that
-# the scripts this execs into are named so their own comm name already
-# reads sensibly in a tab title (gardener.sh, rescue.sh).
 [[ -t 1 ]] && printf '\033]0;Gardener\007'
 
 SELF="$(readlink -f "${BASH_SOURCE[0]}")"

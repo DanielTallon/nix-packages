@@ -462,11 +462,50 @@ prune_generation() {
     return 1
   fi
 
-  if [[ -n "$CURRENT_GEN" && "$GEN" == "$CURRENT_GEN" ]]; then
+  if [[ -z "$BOOTED_GEN" ]]; then
+    echo
+    echo "Can't tell which generation is currently booted, so refusing to" >&2
+    echo "prune anything (see 'boot-gardener rescue --evict N' for details)." >&2
+    return 1
+  fi
+
+  if [[ "$GEN" == "$BOOTED_GEN" ]]; then
     echo
     echo "Generation $GEN is the currently-booted generation and can't be" >&2
     echo "pruned." >&2
     return 1
+  fi
+
+  if [[ -n "$RUNNING_GEN" && "$GEN" == "$RUNNING_GEN" ]]; then
+    echo
+    echo "Generation $GEN is the currently running (activated) generation and" >&2
+    echo "can't be pruned." >&2
+    return 1
+  fi
+
+  # nix-env refuses to delete the profile's own head. That's the one you
+  # typically want gone after a rebuild died on a full /boot: it's the
+  # generation that never made it onto the boot menu. Offer to point the
+  # profile back at the booted generation first -- that only moves the
+  # profile symlink; it doesn't activate anything or touch /boot.
+  local ROLLBACK=0
+  if [[ -n "$HEAD_GEN" && "$GEN" == "$HEAD_GEN" ]]; then
+    echo
+    echo "Generation $GEN is the system profile's head (what nixos-rebuild"
+    echo "considers current), so nix-env can't delete it as-is. You're booted"
+    echo "into generation $BOOTED_GEN."
+    echo
+    echo "To prune it, the profile first has to point back at generation"
+    echo "$BOOTED_GEN (sudo nix-env -p /nix/var/nix/profiles/system"
+    echo "--switch-generation $BOOTED_GEN). That only moves the profile symlink --"
+    echo "it doesn't activate anything, touch /boot, or change what's running."
+    echo
+    read -rp "Roll the profile back to generation $BOOTED_GEN and prune generation $GEN? [yes/N]: " CONFIRM
+    if [[ "$CONFIRM" != "yes" ]]; then
+      echo "Skipped. Generation $GEN was not deleted."
+      return 1
+    fi
+    ROLLBACK=1
   fi
 
   echo
@@ -476,13 +515,23 @@ prune_generation() {
   echo "actually reclaim the space.)"
   echo
 
-  read -rp "Delete generation $GEN from the system profile? [yes/N]: " CONFIRM
-  if [[ "$CONFIRM" != "yes" ]]; then
-    echo "Skipped. Generation $GEN was not deleted."
-    return 1
+  if [[ "$ROLLBACK" -eq 0 ]]; then
+    read -rp "Delete generation $GEN from the system profile? [yes/N]: " CONFIRM
+    if [[ "$CONFIRM" != "yes" ]]; then
+      echo "Skipped. Generation $GEN was not deleted."
+      return 1
+    fi
   fi
 
   require sudo
+  if [[ "$ROLLBACK" -eq 1 ]]; then
+    if ! sudo nix-env -p /nix/var/nix/profiles/system --switch-generation "$BOOTED_GEN"; then
+      echo "Couldn't switch the profile back to generation $BOOTED_GEN -- nothing was deleted." >&2
+      return 1
+    fi
+    echo "Profile now points at generation $BOOTED_GEN."
+    HEAD_GEN="$BOOTED_GEN"
+  fi
   sudo nix-env -p /nix/var/nix/profiles/system --delete-generations "$GEN"
   echo
   echo "Generation $GEN removed from the system profile."
@@ -522,22 +571,13 @@ require fzf
 # cancelled action, so only 'q'/Esc *at the list itself* (or Ctrl-C, any
 # time) actually exits the tool.
 while true; do
-  # Resolved from the profile HEAD (/nix/var/nix/profiles/system), not by
-  # scanning every system-*-link for a store-path match against
-  # /run/current-system. Two profile generations can legitimately point at
-  # the exact same store path (e.g. re-running switch with no config
-  # changes produces a bit-identical closure under a new generation
-  # number) -- a store-path scan then matches *both*, which previously
-  # showed two rows as "(current)" at once and, worse, left CURRENT_GEN
-  # set to whichever duplicate the loop happened to hit, not necessarily
-  # the one nix itself considers current. The profile head is
-  # unambiguous: it's the one generation number nix-env/nixos-rebuild
-  # call "current", full stop.
-  CURRENT_GEN=""
-  if [[ -L /nix/var/nix/profiles/system ]]; then
-    head_link="$(readlink /nix/var/nix/profiles/system 2>/dev/null || true)"
-    CURRENT_GEN=$(basename "$head_link" | sed -E 's/system-([0-9]+)-link/\1/')
-  fi
+  # Booted vs. running vs. profile-head generation -- see
+  # resolve_running_generations in boot-backend.sh. They're normally the
+  # same number, but after a rebuild dies with ENOSPC on a full /boot, the
+  # profile head points at a generation that never reached the boot menu
+  # while the machine is still running the older one it booted. Marking the
+  # head "(current)" there was wrong, and made rescue/harvest refuse to run.
+  resolve_running_generations
 
   declare -A IN_BOOTLOADER=()
   BOOT_COUNT=0
@@ -609,7 +649,13 @@ while true; do
     fi
 
     marker=""
-    [[ -n "$CURRENT_GEN" && "$gen" == "$CURRENT_GEN" ]] && marker=" (current)"
+    if [[ -n "$BOOTED_GEN" && "$gen" == "$BOOTED_GEN" ]]; then
+      marker=" (booted)"
+    elif [[ -n "$RUNNING_GEN" && "$gen" == "$RUNNING_GEN" ]]; then
+      marker=" (running)"
+    elif [[ -n "$HEAD_GEN" && "$gen" == "$HEAD_GEN" ]]; then
+      marker=" (profile head)"
+    fi
 
     boot_marker="-"
     [[ -n "${IN_BOOTLOADER[$gen]:-}" ]] && boot_marker="✓"
@@ -657,6 +703,13 @@ while true; do
 
   HEADER_TEXT="NixOS Generations (${#ROWS[@]} total, ${BOOT_COUNT} in bootloader, ${#PIN_ROWS[@]} pinned -- $BOOTLOADER)"
   [[ -n "$BOOT_USAGE" ]] && HEADER_TEXT="${HEADER_TEXT}"$'\n'"${BOOT_USAGE}"
+  if [[ -n "$HEAD_GEN" && -n "$BOOTED_GEN" && "$HEAD_GEN" != "$BOOTED_GEN" ]]; then
+    if [[ -z "${IN_BOOTLOADER[$HEAD_GEN]:-}" && "$BOOT_READ_OK" -eq 1 ]]; then
+      HEADER_TEXT="${HEADER_TEXT}"$'\n'"Profile head is gen ${HEAD_GEN}, but it never made it onto the boot menu -- you booted gen ${BOOTED_GEN}"
+    else
+      HEADER_TEXT="${HEADER_TEXT}"$'\n'"Profile head is gen ${HEAD_GEN} (next boot's default) -- you booted gen ${BOOTED_GEN}"
+    fi
+  fi
   ENTER_LABEL="Enter:pin/unpin"
   backend_supports_pin || ENTER_LABEL="Enter:pin(Limine only)"
   FOOTER_TEXT="  q/Esc:quit   ${ENTER_LABEL}   Tab:multi-select   p:prune   h:harvest   g:gc   ?:help   ↑↓:move   Type to filter  "

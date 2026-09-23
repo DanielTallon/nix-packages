@@ -19,15 +19,16 @@ nix run github:DanielTallon/nix-packages#boot-gardener
 ```
 **Run without installing, and without flakes enabled:**
 ```sh
-nix run github:DanielTallon/nix-packages#lgl-papercutter
 nix run --extra-experimental-features "nix-command flakes" github:DanielTallon/nix-packages#lgl-papercutter
 nix run --extra-experimental-features "nix-command flakes" github:DanielTallon/nix-packages#kenku-fm
 nix run --extra-experimental-features "nix-command flakes" github:DanielTallon/nix-packages#boot-gardener   
 ```
 
-**Install one:**
+**Install just one:**
 ```sh
+nix profile install github:DanielTallon/nix-packages#lgl-papercutter
 nix profile install github:DanielTallon/nix-packages#kenku-fm
+nix profile install github:DanielTallon/nix-packages#boot-gardener 
 ```
 
 **As a flake input, per-package:**
@@ -37,7 +38,7 @@ inputs.nix-packages.packages.${pkgs.stdenv.hostPlatform.system}.boot-gardener
 
 
 # then reference, e.g. in a NixOS or home-manager module:
-inputs.nix-packages.packages.${pkgs.stdenv.hostPlatform.system}.kenku-fm
+inputs.nix-packages.packages.${pkgs.stdenv.hostPlatform.system}.boot-gardener
 ```
 
 **As an overlay** (pulls both into `pkgs.*`; doesn't install anything by itself):
@@ -50,17 +51,16 @@ nixpkgs.overlays = [ inputs.nix-packages.overlays.default ];
 
 ## A note on `kenku-fm`
 
-Kenku FM is proprietary software. This flake scopes nixpkgs'
-`allowUnfreePredicate` to just this one package (see `flake.nix`), so
+Kenku FM is not my program and is proprietary software. 
+This flake scopes nixpkgs'`allowUnfreePredicate` to just this one package (see `flake.nix`), so
 building or installing it works out of the box — no `NIXPKGS_ALLOW_UNFREE`
-or `--impure` needed. `lgl-papercutter` is unaffected and stays under its
-normal MIT license.
+or `--impure` needed.
 
 ## Updating a package
 
 `lgl-papercutter` and `kenku-fm` are pinned (source + hash), so they won't
 pick up new upstream releases automatically — that's intentional, for
-reproducibility. To bump one:
+reproducibility. To update one:
 
 1. Update `version` (and `rev`, for `lgl-papercutter`) in the relevant
 `lgl-papercutter.nix` or `kenku-fm.nix`.
@@ -70,7 +70,7 @@ wrong string).
 `got:` value from the error into `hash`/`sha256`.
 4. Rebuild, confirm it runs, commit.
 
-`boot-gardener` is my own script with no upstream to track, so this
+`boot-gardener` is my own TUI tool with no upstream to track, so this
 doesn't apply — just check back here to get the updated `version`. If you
 have it as a flake input, `nix flake update` (or `nix flake lock
 --update-input nix-packages`) pulls in whatever's on `main`.

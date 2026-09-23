@@ -18,7 +18,7 @@
 # below, alongside this script) for exactly what differs between them.
 set -euo pipefail
 
-MIN_KEPT=2 # never go below this many kept generations (current included)
+MIN_KEPT=2 # never go below this many kept generations (booted included)
 
 EVICT_GEN=""
 APPLY=0
@@ -221,47 +221,58 @@ if [[ ${#PROFILE_LINKS[@]} -eq 0 ]]; then
   exit 1
 fi
 
-# CURRENT_GEN comes from the profile HEAD (/nix/var/nix/profiles/system),
-# not from scanning PROFILE_LINKS for the first store-path match against
-# CURRENT_SYSTEM. Two generations can legitimately share the exact same
-# store path (e.g. re-running switch with no config changes produces a
-# bit-identical closure under a new generation number) -- the old
-# first-match scan would then silently pick whichever duplicate happened
-# to sort first in the glob, which isn't necessarily the one nix itself
-# considers current, and this guardrail exists specifically to protect
-# the real one. CURRENT_SYSTEM is kept only as a sanity check below.
-CURRENT_GEN=""
-if [[ -L /nix/var/nix/profiles/system ]]; then
-  head_link="$(readlink /nix/var/nix/profiles/system 2>/dev/null || true)"
-  CURRENT_GEN=$(basename "$head_link" | sed -E 's/system-([0-9]+)-link/\1/')
-fi
-CURRENT_GEN_STORE=""
-[[ -n "$CURRENT_GEN" ]] && CURRENT_GEN_STORE="$(readlink -f "/nix/var/nix/profiles/system" 2>/dev/null || true)"
+# Which generations must never be evicted: the one actually booted, the one
+# activated right now, and the profile head. See resolve_running_generations
+# in boot-backend.sh for why these are three separate things -- in short,
+# a `nixos-rebuild boot` that dies with ENOSPC on a full /boot has already
+# advanced the profile head to a generation that never reached the boot
+# menu, while the machine is still running an older one. The previous
+# "profile head == booted" assumption made this script refuse outright in
+# exactly that situation, the one it exists for.
+resolve_running_generations
 
-if [[ -z "$CURRENT_GEN" || "$CURRENT_GEN_STORE" != "$CURRENT_SYSTEM" ]]; then
-  # A booted system whose profile head doesn't resolve, or resolves to a
-  # different store path than what's actually booted, almost always means
-  # it was activated with `nixos-rebuild test` / `switch-to-configuration
-  # test`, which deliberately skips updating the profile (and the boot
-  # menu) -- so there's genuinely no generation number to protect.
+if [[ -z "$BOOTED_GEN" ]]; then
+  # The running system doesn't match any profile generation at all. That
+  # almost always means it was activated with `nixos-rebuild test` /
+  # `switch-to-configuration test` (which skips creating a generation), or
+  # the generation it was booted from has since been deleted.
   echo "Error: could not determine the currently-booted generation number." >&2
   echo "/run/current-system -> $CURRENT_SYSTEM" >&2
-  echo "...but /nix/var/nix/profiles/system doesn't resolve to that same store path." >&2
+  [[ -e /run/booted-system ]] && echo "/run/booted-system  -> $(readlink -f /run/booted-system)" >&2
+  echo "...and no /nix/var/nix/profiles/system-*-link resolves to that store path." >&2
   echo >&2
   echo "This usually means the running system was activated with 'nixos-rebuild test'" >&2
-  echo "(or 'switch-to-configuration test'), which skips creating a profile generation" >&2
-  echo "and skips updating the boot menu -- so there's genuinely nothing to protect it." >&2
+  echo "(or 'switch-to-configuration test'), which skips creating a profile generation," >&2
+  echo "or the generation it was booted from has since been deleted." >&2
   echo >&2
-  echo "Fix: run 'nixos-rebuild switch' (or 'nh os switch') to register the current" >&2
-  echo "system as a real generation, then re-run 'boot-gardener rescue'." >&2
-  echo >&2
-  echo "Refusing to preview any eviction -- can't guarantee the current generation" >&2
+  echo "Refusing to preview any eviction -- can't guarantee the running system" >&2
   echo "would be protected." >&2
   exit 1
 fi
 
-if [[ "$EVICT_GEN" == "$CURRENT_GEN" ]]; then
-  echo "Refusing to preview evicting generation $EVICT_GEN -- it is the currently booted generation." >&2
+echo "Booted generation: $BOOTED_GEN"
+[[ -n "$RUNNING_GEN" && "$RUNNING_GEN" != "$BOOTED_GEN" ]] && echo "Running (activated since boot): $RUNNING_GEN"
+if [[ -n "$HEAD_GEN" && "$HEAD_GEN" != "$BOOTED_GEN" ]]; then
+  echo "Profile head: $HEAD_GEN (not the booted generation -- typically a rebuild that"
+  echo "  failed to install its boot entry, e.g. because /boot was full)"
+fi
+echo
+
+if is_protected_gen "$EVICT_GEN"; then
+  if [[ "$EVICT_GEN" == "$BOOTED_GEN" ]]; then
+    echo "Refusing to preview evicting generation $EVICT_GEN -- it is the currently booted generation." >&2
+  elif [[ "$EVICT_GEN" == "$RUNNING_GEN" ]]; then
+    echo "Refusing to preview evicting generation $EVICT_GEN -- it is the currently running (activated) generation." >&2
+  elif [[ "$EVICT_GEN" != "$HEAD_GEN" ]]; then
+    echo "Refusing to preview evicting generation $EVICT_GEN -- it's the exact same system as the" >&2
+    echo "booted/running generation (identical store path), so its boot entry may be the one" >&2
+    echo "you actually booted from. It'll be safe to harvest after you've booted something else." >&2
+  else
+    echo "Refusing to preview evicting generation $EVICT_GEN -- it is the system profile's head" >&2
+    echo "(the generation nixos-rebuild considers current), and nix-env can't delete that." >&2
+    echo "Roll the profile back first if you really want it gone:" >&2
+    echo "  sudo nix-env -p /nix/var/nix/profiles/system --switch-generation $BOOTED_GEN" >&2
+  fi
   exit 1
 fi
 
@@ -354,14 +365,22 @@ NEW_KEPT_COUNT=$(grep -c '.' <<<"$NEW_KEPT_GENS" || true)
 
 VALIDATION_FAILED=0
 [[ "$NEW_KEPT_COUNT" -eq $((KEPT_COUNT - 1)) ]] || { echo "Validation failed: expected $((KEPT_COUNT - 1)) kept generations after edit, found $NEW_KEPT_COUNT." >&2; VALIDATION_FAILED=1; }
-grep -qxF "$CURRENT_GEN" <<<"$NEW_KEPT_GENS" || { echo "Validation failed: current generation $CURRENT_GEN missing from the edited file." >&2; VALIDATION_FAILED=1; }
+for pgen in $PROTECTED_GENS; do
+  # Only a protected generation that was on the boot menu to begin with has
+  # to still be there -- e.g. a profile head whose own boot-entry install is
+  # what hit ENOSPC was never on it.
+  if grep -qxF "$pgen" <<<"$KEPT_GENS" && ! grep -qxF "$pgen" <<<"$NEW_KEPT_GENS"; then
+    echo "Validation failed: protected generation $pgen missing from the edited file." >&2
+    VALIDATION_FAILED=1
+  fi
+done
 grep -qxF "$EVICT_GEN" <<<"$NEW_KEPT_GENS" && { echo "Validation failed: generation $EVICT_GEN still present after removal." >&2; VALIDATION_FAILED=1; }
 
 if [[ "$VALIDATION_FAILED" -eq 1 ]]; then
   echo "Refusing to write $BOOT_CONF_DISPLAY -- validation failed. Nothing was changed." >&2
   exit 1
 fi
-echo "Validation passed ($NEW_KEPT_COUNT kept generations remain, current generation $CURRENT_GEN intact)."
+echo "Validation passed ($NEW_KEPT_COUNT kept generations remain, booted generation $BOOTED_GEN intact)."
 echo
 
 if [[ "$ORPHAN_COUNT" -gt 0 ]]; then

@@ -324,12 +324,29 @@ Identical across all three backends:
 - Never proposes evicting the currently-booted generation — and refuses
   outright (rather than proceeding) if it can't determine which generation
   that is, since "unknown" must mean "refuse," not "allow."
-- Never lets the boot menu drop below 2 kept generations (current + at
+- "Booted" means what the machine actually booted (`/run/booted-system`),
+  **not** the system profile's head. They differ in exactly the situation
+  this tool is for: a `nixos-rebuild boot`/`switch` that dies with `ENOSPC`
+  has already advanced the profile head to a new generation that never
+  made it onto the boot menu, while you're still running an older one. The
+  picker marks the two separately — `(booted)` and `(profile head)` — and
+  adds a header line when they disagree. Also protected from eviction: the
+  running generation if you've `switch`ed since booting, the profile head
+  (nix-env can't delete it anyway), and any generation with the exact same
+  store path as the booted one (on systemd-boot the `LoaderEntrySelected`
+  EFI variable pins down which duplicate you really booted; Limine and GRUB
+  have no equivalent, so every duplicate is kept).
+- Pruning (`p`) the profile head — typically the generation that filled
+  `/boot` — offers to point the profile back at the booted generation first
+  (`nix-env --switch-generation`, which only moves the profile symlink;
+  nothing is activated and `/boot` isn't touched), since nix-env refuses to
+  delete a profile's head.
+- Never lets the boot menu drop below 2 kept generations (booted + at
   least 1 other), even in `--apply` mode, no override.
 - `--apply` backs up the affected boot-menu config first (timestamped,
   next to the original — the whole shared config file on Limine and GRUB,
   or just the one entry file on systemd-boot), validates the predicted
-  post-removal state — kept-generation count, current generation still
+  post-removal state — kept-generation count, booted generation still
   present, evicted generation truly gone — *before* writing anything, and
   only writes if every check passes.
 - Confirmed on real hardware (Limine) and, since, real VMs for both other

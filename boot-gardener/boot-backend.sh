@@ -75,7 +75,7 @@ SYSTEMD_BOOT_EFI_NIXOS_DIR="/boot/EFI/nixos"
 GRUB_CONF="/boot/grub/grub.cfg"
 GRUB_KERNELS_DIR="/boot/kernels"
 
-# --- generic root-read helpers ----------------------------------------------
+# --- Generic Root-Read Helpers ----------------------------------------------
 
 read_root_file() {
   # Strict: exits the script if the file can't be read at all.
@@ -155,6 +155,139 @@ try_list_root_dir() {
   fi
   echo "Note: $path isn't readable and 'sudo' isn't available -- bootloader-in-use markers will be unavailable this run." >&2
   return 1
+}
+
+# --- which generation is actually running? ----------------------------------
+#
+# Three different things get called "the current generation", and on a
+# healthy system they're all the same number -- but a full /boot is exactly
+# the situation where they come apart:
+#
+#   BOOTED_GEN   what the machine actually booted       (/run/booted-system)
+#   RUNNING_GEN  what's activated right now             (/run/current-system)
+#                -- differs from BOOTED_GEN after a 'switch' without a reboot
+#   HEAD_GEN     the system profile's head              (/nix/var/nix/profiles/system)
+#                -- what nix-env/nixos-rebuild call "current", and what the
+#                next boot *would* default to if its boot entry got written
+#
+# `nixos-rebuild boot`/`switch` advances HEAD_GEN *before* installing the
+# bootloader entry. When that install then dies with ENOSPC, the profile
+# head points at a generation that never made it onto the boot menu --
+# while the machine is still running whatever older generation it booted.
+# Treating HEAD_GEN as "the booted one" there makes the tool protect the
+# wrong generation and refuse to help at all, which is the one moment it's
+# needed most.
+#
+# resolve_running_generations sets all three, plus PROTECTED_GENS -- a
+# space-separated list of all three *and* every other generation sharing
+# the booted or running store path (see below) -- and never exits.
+# Any of them can come back empty if it can't be resolved -- callers that
+# are about to delete something must fail closed on an empty BOOTED_GEN.
+#
+# Store path -> generation number is by matching every system-N-link, and
+# two generations can legitimately share one store path (re-running switch
+# with no config changes). Ties are broken, in order, by: systemd-boot's
+# LoaderEntrySelected EFI variable (names the exact entry the firmware
+# booted -- only used for BOOTED_GEN), then the profile head if it's among
+# the tied generations, then the highest-numbered one. Since duplicates are
+# bit-identical closures, picking any of them keeps the running system's
+# store path alive; the order just makes the choice stable and sensible.
+# But without the EFI variable (Limine, GRUB) there's no way to know which
+# duplicate's boot entry was really the one used, so every duplicate of the
+# booted/running store path goes into PROTECTED_GENS: harvesting a
+# "duplicate" could otherwise remove the very boot entry you came in on.
+
+_BG_PROFILE_DIR="${_BG_PROFILE_DIR:-/nix/var/nix/profiles}"
+_BG_RUN_DIR="${_BG_RUN_DIR:-/run}"
+_BG_EFIVARS_DIR="${_BG_EFIVARS_DIR:-/sys/firmware/efi/efivars}"
+_BG_LOADER_ENTRY_SELECTED="LoaderEntrySelected-4a67b082-0a4c-41cf-b6c7-440b29bb8c4f"
+
+_gen_of_link() {
+  basename "$1" | sed -nE 's/^system-([0-9]+)-link$/\1/p'
+}
+
+_gens_for_store_path() {
+  # Prints every generation number whose system-N-link resolves to $1.
+  local want="$1" link target
+  [[ -n "$want" ]] || return 0
+  shopt -s nullglob
+  for link in "$_BG_PROFILE_DIR"/system-*-link; do
+    target="$(readlink -f "$link" 2>/dev/null || true)"
+    [[ "$target" == "$want" ]] && _gen_of_link "$link"
+  done
+  shopt -u nullglob
+}
+
+_efi_selected_gen() {
+  # systemd-boot only: the generation of the entry the firmware booted,
+  # from the LoaderEntrySelected EFI variable (world-readable; 4 bytes of
+  # attributes, then a UTF-16LE entry id like "nixos-generation-5.conf" or
+  # "nixos-generation-5-specialisation-foo.conf"). Prints nothing if the
+  # variable isn't there (not systemd-boot, not EFI, efivarfs not mounted).
+  local var="$_BG_EFIVARS_DIR/$_BG_LOADER_ENTRY_SELECTED"
+  [[ -r "$var" ]] || return 0
+  tail -c +5 "$var" 2>/dev/null | tr -d '\0' |
+    sed -nE 's/^nixos-generation-([0-9]+)([-.].*)?$/\1/p'
+}
+
+_pick_gen() {
+  # $1: newline list of candidate gens  $2: preferred gen (optional)
+  # $3: second-choice gen (optional). Falls back to the highest number.
+  local cands="$1" pref
+  [[ -n "$cands" ]] || return 0
+  for pref in "${2:-}" "${3:-}"; do
+    if [[ -n "$pref" ]] && grep -qxF "$pref" <<<"$cands"; then
+      echo "$pref"
+      return 0
+    fi
+  done
+  sort -n <<<"$cands" | tail -n1
+}
+
+resolve_running_generations() {
+  HEAD_GEN=""
+  BOOTED_GEN=""
+  RUNNING_GEN=""
+  PROTECTED_GENS=""
+
+  local head_link booted_path="" running_path="" efi_gen booted_cands="" running_cands=""
+  if [[ -L "$_BG_PROFILE_DIR/system" ]]; then
+    head_link="$(readlink "$_BG_PROFILE_DIR/system" 2>/dev/null || true)"
+    HEAD_GEN="$(_gen_of_link "$head_link")"
+  fi
+
+  efi_gen="$(_efi_selected_gen)"
+
+  if [[ -e "$_BG_RUN_DIR/booted-system" ]]; then
+    booted_path="$(readlink -f "$_BG_RUN_DIR/booted-system" 2>/dev/null || true)"
+    booted_cands="$(_gens_for_store_path "$booted_path")"
+    BOOTED_GEN="$(_pick_gen "$booted_cands" "$efi_gen" "$HEAD_GEN")"
+  fi
+
+  if [[ -e "$_BG_RUN_DIR/current-system" ]]; then
+    running_path="$(readlink -f "$_BG_RUN_DIR/current-system" 2>/dev/null || true)"
+    if [[ -n "$BOOTED_GEN" && "$running_path" == "$booted_path" ]]; then
+      RUNNING_GEN="$BOOTED_GEN"
+    else
+      running_cands="$(_gens_for_store_path "$running_path")"
+      RUNNING_GEN="$(_pick_gen "$running_cands" "$HEAD_GEN")"
+    fi
+  fi
+
+  # No /run/booted-system (very old or unusual setups): the running system
+  # is the best available stand-in for what was booted.
+  [[ -n "$BOOTED_GEN" ]] || BOOTED_GEN="$RUNNING_GEN"
+
+  local g
+  for g in "$BOOTED_GEN" "$RUNNING_GEN" "$HEAD_GEN" $booted_cands $running_cands; do
+    [[ -n "$g" ]] || continue
+    [[ " $PROTECTED_GENS " == *" $g "* ]] || PROTECTED_GENS="${PROTECTED_GENS:+$PROTECTED_GENS }$g"
+  done
+  return 0
+}
+
+is_protected_gen() {
+  [[ " $PROTECTED_GENS " == *" $1 "* ]]
 }
 
 # --- detection / init --------------------------------------------------------
