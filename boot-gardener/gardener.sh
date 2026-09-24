@@ -35,6 +35,7 @@ OUTPUT="limine-pins.json"
 ACTION="add"
 REMOVE_NAME=""
 BOOTLOADER_OVERRIDE=""
+YIELD_ENABLED=1
 
 SELF="$(readlink -f "${BASH_SOURCE[0]}")"
 RESCUE_SCRIPT="$(dirname "$SELF")/rescue.sh"
@@ -59,7 +60,19 @@ Usage:
   boot-gardener --output FILE        Use a different pins file (default: ./limine-pins.json)
   boot-gardener --bootloader limine|systemd-boot|grub
                                      Skip auto-detection and use this backend
+  boot-gardener --no-yield           Don't compute the YIELD column (faster
+                                     startup; the column shows '?')
   boot-gardener --help               Show this help
+
+The YIELD column estimates how much Nix store space removing that
+generation would free: the combined size of the store paths that only
+that generation uses (nothing else on the system -- no other generation,
+no pin, no user profile, no result link -- references them). Prune ('p')
+or harvest ('h') removes the generation; the space itself only comes back
+after the next garbage collection ('g'). It's an upper bound: store
+deduplication (auto-optimise-store) can make the real saving smaller. An
+identical rebuild of another generation shows 0 B, because the two share
+everything.
 
 Bootloader (Limine, systemd-boot, or GRUB) is auto-detected from what's on
 /boot. 'p'/'h'/'g' work the same on all three. Pinning ('Enter') is
@@ -171,6 +184,10 @@ while [[ $# -gt 0 ]]; do
       BOOTLOADER_OVERRIDE="${2:-}"
       shift 2
       ;;
+    --no-yield)
+      YIELD_ENABLED=0
+      shift
+      ;;
     --help | -h)
       usage
       exit 0
@@ -217,7 +234,11 @@ backend_init "$BOOTLOADER_OVERRIDE"
 RESCUE_ARGS=(--bootloader "$BOOTLOADER")
 
 HELP_FILE=$(mktemp)
-trap 'rm -f "$HELP_FILE"' EXIT
+# Session-only cache for the YIELD column: one file per generation's
+# closure, keyed by its toplevel store path (immutable, so a cached closure
+# never goes stale). Only new generations cost anything on later redraws.
+YIELD_DIR=$(mktemp -d)
+trap 'rm -f "$HELP_FILE"; rm -rf "$YIELD_DIR"' EXIT
 cat >"$HELP_FILE" <<EOF
 Gardener -- key reference (bootloader: $BOOTLOADER)
 
@@ -255,6 +276,13 @@ Gardener -- key reference (bootloader: $BOOTLOADER)
            Never touches the system profile or the boot menu config.
 
   ?        Toggle this help.
+
+  YIELD    (column) Roughly how much Nix store space removing that
+           generation would free: the paths nothing else on the system
+           uses. The space only comes back after 'g'. 0 B means an
+           identical or near-identical generation shares everything with
+           it, so removing it alone frees almost nothing. Upper bound --
+           store deduplication can make the real saving smaller.
 
   q / Esc  Quit the tool entirely (as does Ctrl-C, any time). 'q' at a
            prompt or confirmation instead cancels just that one action
@@ -565,6 +593,112 @@ harvest_generation() {
   fi
 }
 
+# Human-readable byte count, binary units (matches the README's GiB figures).
+fmt_bytes() {
+  awk -v b="$1" 'BEGIN {
+    if (b < 1) { print "0 B"; exit }
+    split("B KiB MiB GiB TiB", u, " "); i = 1
+    while (b >= 1024 && i < 5) { b /= 1024; i++ }
+    printf (i == 1 ? "%d %s\n" : "%.1f %s\n"), b, u[i]
+  }'
+}
+
+# Fills YIELD[gen] with the bytes of store paths ONLY that generation
+# references -- i.e. what pruning/harvesting it, then running 'g', would
+# free. Every other generation counts as a separate owner, and so does
+# everything else that keeps store paths alive (user/home-manager profiles,
+# result links, /run/current-system, /run/booted-system, running processes)
+# lumped together as one '@other' owner. Pins need no special handling:
+# the current system's closure already contains each pin's init script,
+# and that closure is owned by several generations plus /run/current-system.
+#
+# Read-only throughout. Returns 1 (leaving YIELD empty) if anything needed
+# is missing or the numbers can't be trusted, and the column shows '?'.
+declare -A YIELD=()
+compute_yields() {
+  YIELD=()
+  command -v nix-store >/dev/null 2>&1 || return 1
+
+  local link gen top base
+  local owners="$YIELD_DIR/owners" unique="$YIELD_DIR/unique"
+  local sizes="$YIELD_DIR/sizes" roots="$YIELD_DIR/roots"
+  local -a missing=() gen_list=() top_list=()
+
+  for link in "${LINKS[@]}"; do
+    gen=$(basename "$link" | sed -E 's/system-([0-9]+)-link/\1/')
+    top=$(readlink -f "$link" 2>/dev/null) || continue
+    [[ -e "$top" ]] || continue
+    gen_list+=("$gen")
+    top_list+=("$top")
+    base=$(basename "$top")
+    [[ -s "$YIELD_DIR/c-$base" ]] || missing+=("$top")
+  done
+  [[ ${#gen_list[@]} -gt 0 ]] || return 1
+
+  # 1) Closures not cached yet this session, in parallel. Generations
+  #    sharing one toplevel are only queried once.
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    echo "Measuring YIELD for ${#missing[@]} generation(s) (only new ones are measured on later redraws)..." >&2
+    printf '%s\n' "${missing[@]}" | sort -u |
+      xargs -r -P "$(nproc 2>/dev/null || echo 4)" -I{} sh -c \
+        'b=$(basename "$1"); nix-store -qR "$1" >"$2/c-$b.tmp" 2>/dev/null && mv "$2/c-$b.tmp" "$2/c-$b"' \
+        _ {} "$YIELD_DIR" || true
+  fi
+
+  : >"$owners"
+  local i
+  for i in "${!gen_list[@]}"; do
+    base=$(basename "${top_list[$i]}")
+    # A generation whose closure couldn't be read would make everything it
+    # shares with others look unique to them -- refuse rather than guess.
+    [[ -s "$YIELD_DIR/c-$base" ]] || return 1
+    awk -v g="${gen_list[$i]}" '{ print g " " $0 }' "$YIELD_DIR/c-$base" >>"$owners"
+  done
+
+  # 2) Everything else keeping store paths alive. Every system-profile link
+  #    is already counted above, per generation. Non-root users see some
+  #    roots as '{censored}', but the store path they point to is still
+  #    shown, which is all that's needed here. Newer Nix versions print the
+  #    link path in double quotes ("/nix/var/.../system-155-link" -> ...),
+  #    older ones don't -- strip them either way before matching, or every
+  #    generation gets counted a second time as '@other' and all yields
+  #    come out 0 B.
+  nix-store --gc --print-roots 2>/dev/null |
+    awk -F' -> ' '{ l = $1; gsub(/^"|"$/, "", l); t = $2; gsub(/^"|"$/, "", t) }
+                  l !~ /^\/nix\/var\/nix\/profiles\/system(-[0-9]+-link)?$/ { print t }' |
+    sed -nE 's|^(/nix/store/[^/]+).*|\1|p' | sort -u >"$roots" || true
+  if [[ -s "$roots" ]]; then
+    while read -r p; do [[ -e "$p" ]] && printf '%s\n' "$p"; done <"$roots" |
+      xargs -r nix-store -qR 2>/dev/null | sort -u |
+      awk '{ print "@other " $0 }' >>"$owners" || true
+  fi
+
+  # 3) Paths exactly one owner references, when that owner is a generation.
+  #    Each generation's closure lists a path at most once, so a line count
+  #    per path is an owner count.
+  awk '{ c[$2]++; o[$2] = $1 }
+       END { for (p in c) if (c[p] == 1 && o[p] != "@other") print o[p], p }' \
+    "$owners" >"$unique"
+
+  # 4) Sizes (NAR size, same measure 'nh os info' uses for closure size).
+  #    nix-store prints one size per path, in order, so the two columns line
+  #    up -- verified by line count before trusting the pairing.
+  if [[ -s "$unique" ]]; then
+    cut -d' ' -f2 "$unique" | xargs -r nix-store -q --size >"$sizes" 2>/dev/null || return 1
+    [[ $(wc -l <"$sizes") -eq $(wc -l <"$unique") ]] || return 1
+  else
+    : >"$sizes"
+  fi
+
+  for gen in "${gen_list[@]}"; do YIELD["$gen"]=0; done
+  local g s
+  while read -r g s; do
+    [[ -n "$g" ]] && YIELD["$g"]="$s"
+  done < <(paste -d' ' <(cut -d' ' -f1 "$unique") "$sizes" |
+    awk '{ t[$1] += $2 } END { for (g in t) printf "%s %.0f\n", g, t[g] }')
+  return 0
+}
+
 require fzf
 
 # Main loop: redisplay the generation picker after every completed or
@@ -628,6 +762,11 @@ while true; do
     exit 1
   fi
 
+  YIELD_OK=0
+  if [[ "$YIELD_ENABLED" -eq 1 ]]; then
+    compute_yields && YIELD_OK=1
+  fi
+
   ROWS=()
   for link in "${LINKS[@]}"; do
     gen=$(basename "$link" | sed -E 's/system-([0-9]+)-link/\1/')
@@ -658,7 +797,10 @@ while true; do
     boot_marker="-"
     [[ -n "${IN_BOOTLOADER[$gen]:-}" ]] && boot_marker="✓"
 
-    ROWS+=("${gen}"$'\t'"${boot_marker}"$'\t'"${gen_date}"$'\t'"${nixos_ver}"$'\t'"${kernel_ver}${marker}")
+    yield_str="?"
+    [[ "$YIELD_OK" -eq 1 && -n "${YIELD[$gen]:-}" ]] && yield_str=$(fmt_bytes "${YIELD[$gen]}")
+
+    ROWS+=("${gen}"$'\t'"${boot_marker}"$'\t'"${yield_str}"$'\t'"${gen_date}"$'\t'"${nixos_ver}"$'\t'"${kernel_ver}${marker}")
   done
 
   # Pins are captured store paths, decoupled from the system profile on
@@ -676,7 +818,7 @@ while true; do
       [[ -n "$pname" ]] || continue
       pdate=$(grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' <<<"$ptitle" | head -n1)
       [[ -n "$pdate" ]] || pdate="-"
-      PIN_ROWS+=("pin:${pname}"$'\t''📌'$'\t'"${pdate}"$'\t''-'$'\t'"pinned: ${pname}")
+      PIN_ROWS+=("pin:${pname}"$'\t''📌'$'\t''-'$'\t'"${pdate}"$'\t''-'$'\t'"pinned: ${pname}")
     done < <(jq -r '.[] | "\(.name)\t\(.title)"' "$OUTPUT")
   fi
 
@@ -701,6 +843,9 @@ while true; do
 
   HEADER_TEXT="NixOS Generations (${#ROWS[@]} total, ${BOOT_COUNT} in bootloader, ${#PIN_ROWS[@]} pinned -- $BOOTLOADER)"
   [[ -n "$BOOT_USAGE" ]] && HEADER_TEXT="${HEADER_TEXT}"$'\n'"${BOOT_USAGE}"
+  if [[ "$YIELD_ENABLED" -eq 1 && "$YIELD_OK" -eq 0 ]]; then
+    HEADER_TEXT="${HEADER_TEXT}"$'\n'"YIELD unavailable (couldn't read store closures) -- column shows '?'"
+  fi
   if [[ -n "$HEAD_GEN" && -n "$BOOTED_GEN" && "$HEAD_GEN" != "$BOOTED_GEN" ]]; then
     if [[ -z "${IN_BOOTLOADER[$HEAD_GEN]:-}" && "$BOOT_READ_OK" -eq 1 ]]; then
       HEADER_TEXT="${HEADER_TEXT}"$'\n'"Profile head is gen ${HEAD_GEN}, but it never made it onto the boot menu -- you booted gen ${BOOTED_GEN}"
@@ -714,9 +859,9 @@ while true; do
 
   RAW=$(
     {
-      printf 'GEN\tBOOT\tDATE\tNIXOS\tKERNEL\n'
+      printf 'GEN\tBOOT\tYIELD\tBUILT\tNIXOS VERSION\tKERNEL\n'
       printf '%s\n' "$BODY"
-    } | column -t -s $'\t' |
+    } | column -t -s $'\t' -R 3 |
       fzf --style full \
         --layout reverse \
         --header-first \

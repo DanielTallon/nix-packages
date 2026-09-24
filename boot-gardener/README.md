@@ -88,6 +88,9 @@ boot-gardener --remove gen-144
 
 # Skip bootloader auto-detection
 boot-gardener --bootloader systemd-boot
+
+# Skip the YIELD column (faster startup)
+boot-gardener --no-yield
 ```
 
 The list shows generation number, date, NixOS/kernel version, and a `BOOT`
@@ -97,6 +100,36 @@ on systemd-boot, or `/boot/grub/grub.cfg` on GRUB — all need `sudo` to
 read; you'll be prompted once, up front). A second header line shows
 `/boot`'s used/free space and percent-full (`df -h /boot`, no `sudo`
 needed), recomputed on every redraw so it reflects `p`/`h`/`g` immediately.
+
+The `YIELD` column estimates how much Nix store space removing that
+generation would free: the total size of the store paths that *only* that
+generation uses. A path doesn't count if another generation, a pin, a user
+or home-manager profile, a `result` link, `/run/current-system`, or a
+running process also keeps it alive. It's measured with read-only
+`nix-store` queries: each generation's closure, the other GC roots, and the
+sizes of the paths that turn out to be unique. It uses the same size
+measure as `nh os info`'s closure size.
+
+Reading it:
+
+- **`0 B`** usually means another generation is an identical or
+  near-identical rebuild, so removing this one alone frees almost nothing.
+  The booted/running generation also shows `0 B`, since
+  `/run/current-system` keeps it alive until you reboot or switch away.
+- **Large numbers** mark generations that are the last thing holding an old
+  kernel, desktop, or package set, which is the same effect behind a pin's
+  disk cost (see below).
+- The space only comes back after a garbage collection (`g`). Prune (`p`)
+  and harvest (`h`) remove the generation; `g` frees what it held.
+- It's an upper bound. With `nix.settings.auto-optimise-store`, identical
+  files are hard-linked across paths, so the real saving can be smaller.
+- Values are for removing **one** generation. Removing two similar
+  generations together can free more than their two numbers add up to,
+  because paths they shared only with each other become free too.
+
+The first draw measures every generation (usually a few seconds);
+closures are cached for the session, so later redraws only measure new
+generations. `--no-yield` skips it entirely and the column shows `?`.
 
 - **Tab** marks a generation for a multi-select action without leaving the
   list; **Shift-Tab** unmarks one. Marking generations only matters for

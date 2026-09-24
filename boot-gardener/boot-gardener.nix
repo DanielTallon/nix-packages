@@ -1,9 +1,9 @@
-{ lib, stdenvNoCC, makeWrapper, jq, fzf, coreutils, gnused, gawk, util-linux
+{ lib, stdenvNoCC, makeWrapper, jq, fzf, coreutils, gnused, gawk, util-linux, findutils
 }:
 
 stdenvNoCC.mkDerivation {
   pname = "boot-gardener";
-  version = "2.5.1";
+  version = "2.6.0";
 
   src = ./.;
 
@@ -18,7 +18,7 @@ stdenvNoCC.mkDerivation {
     install -m755 boot-gardener $out/bin/boot-gardener
 
     wrapProgram $out/bin/boot-gardener \
-      --prefix PATH : ${lib.makeBinPath [ jq fzf coreutils gnused gawk util-linux ]}
+      --prefix PATH : ${lib.makeBinPath [ jq fzf coreutils gnused gawk util-linux findutils ]}
   '';
 
   meta = with lib; {
