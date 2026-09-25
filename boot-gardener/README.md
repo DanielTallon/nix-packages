@@ -8,7 +8,7 @@ develop leftovers, and an in-place help panel — all from one scrollable
 list. Plus a rescue tool for when `/boot` fills up and a normal rebuild
 can't even run.
 
-Two scripts under one command:
+Two commands, one file — everything is embedded in `boot-gardener.nix`:
 
 - **`boot-gardener`** — browse your system generations and pin one to the
   boot menu (bypassing `maxGenerations` garbage collection), prune one that
@@ -413,6 +413,21 @@ Identical across all three backends:
 - `jq`, `fzf` (provided automatically if run via `nix run`)
 - `sudo` access (for reading the boot-menu config, and for
   `boot-gardener rescue --apply`'s file operations)
+  
+## Editing the scripts
+
+All four scripts (the `boot-gardener` dispatcher, `gardener.sh`,
+`rescue.sh`, and `boot-backend.sh`) live inside `boot-gardener.nix` as Nix
+indented strings, and are installed to `bin/` and `libexec/boot-gardener/`
+at build time. Inside them, a few characters need Nix escaping:
+
+| In bash       | Write in the .nix file |
+|---------------|------------------------|
+| `${VAR}`      | `''${VAR}`             |
+| `''`          | `'''`                  |
+| `'` right before `${` | `''\'` (then `''${…}`) |
+
+A bare `$VAR` needs no escaping.
 
 ## Caveats
 
