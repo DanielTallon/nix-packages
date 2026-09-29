@@ -23,13 +23,16 @@
             lgl-papercutter = pkgs.callPackage ./lgl-papercutter/lgl-papercutter.nix { };
             kenku-fm = pkgs.callPackage ./kenku-fm/kenku-fm.nix { };
             boot-gardener = pkgs.callPackage ./boot-gardener/boot-gardener.nix { };
-        } // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
+        } // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") (let
             # Windows DLLs for Proton (Witcher 3 RT workaround), cross-built with mingw.
-            # x86_64-linux only: Proton and the game are x86_64-only anyway.
             vkd3d-proton-w3rt = pkgs.pkgsCross.mingwW64.callPackage ./vkd3d-proton-w3rt/vkd3d-proton-w3rt.nix {
               wine = pkgs.wineWow64Packages.stable; # native wine for widl; must not come via cross splicing
             };
-        };
+          in {
+            inherit vkd3d-proton-w3rt;
+            # Ready-to-use Steam compat tool: GE-Proton11-7 with those DLLs swapped in.
+            proton-ge-w3rt = pkgs.callPackage ./proton-ge-w3rt/proton-ge-w3rt.nix { inherit vkd3d-proton-w3rt; };
+          });
       }
     ) // {
       # Overlay-style consumption: add this to your own `pkgs` and all
@@ -38,6 +41,7 @@
         lgl-papercutter = final.callPackage ./lgl-papercutter/lgl-papercutter.nix { };
         kenku-fm = final.callPackage ./kenku-fm/kenku-fm.nix { };
         boot-gardener = final.callPackage ./boot-gardener/boot-gardener.nix { };
+        proton-ge-w3rt = final.callPackage ./proton-ge-w3rt/proton-ge-w3rt.nix { };
         vkd3d-proton-w3rt = final.pkgsCross.mingwW64.callPackage ./vkd3d-proton-w3rt/vkd3d-proton-w3rt.nix {
           wine = final.wineWow64Packages.stable;
         };
