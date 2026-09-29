@@ -1,5 +1,5 @@
 {
-  description = "Standalone Nix packages: lgl-papercutter, kenku-fm, boot-gardener";
+  description = "Standalone Nix packages: lgl-papercutter, kenku-fm, boot-gardener, vkd3d-proton-w3rt";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
@@ -23,15 +23,24 @@
             lgl-papercutter = pkgs.callPackage ./lgl-papercutter/lgl-papercutter.nix { };
             kenku-fm = pkgs.callPackage ./kenku-fm/kenku-fm.nix { };
             boot-gardener = pkgs.callPackage ./boot-gardener/boot-gardener.nix { };
+        } // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
+            # Windows DLLs for Proton (Witcher 3 RT workaround), cross-built with mingw.
+            # x86_64-linux only: Proton and the game are x86_64-only anyway.
+            vkd3d-proton-w3rt = pkgs.pkgsCross.mingwW64.callPackage ./vkd3d-proton-w3rt/vkd3d-proton-w3rt.nix {
+              wine = pkgs.wineWow64Packages.stable; # native wine for widl; must not come via cross splicing
+            };
         };
       }
     ) // {
-      # Overlay-style consumption: add this to your own `pkgs` and all three
+      # Overlay-style consumption: add this to your own `pkgs` and all
       # packages become ordinary attributes (pkgs.lgl-papercutter, etc.).
       overlays.default = final: prev: {
         lgl-papercutter = final.callPackage ./lgl-papercutter/lgl-papercutter.nix { };
         kenku-fm = final.callPackage ./kenku-fm/kenku-fm.nix { };
         boot-gardener = final.callPackage ./boot-gardener/boot-gardener.nix { };
+        vkd3d-proton-w3rt = final.pkgsCross.mingwW64.callPackage ./vkd3d-proton-w3rt/vkd3d-proton-w3rt.nix {
+          wine = final.wineWow64Packages.stable;
+        };
       };
     };
 }
