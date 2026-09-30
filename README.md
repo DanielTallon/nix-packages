@@ -82,17 +82,23 @@ not fixed upstream at the time of writing.
    ships (`af89350c`), with the gist's RTAS prebuild-size workaround applied.
 
 This is an unofficial workaround — use it at your own risk, and back up your saves
-before the first ray-traced load. The hang is NVIDIA-specific, so AMD users (including
-the Steam Deck) most likely don't need the vkd3d-proton part.
+before the first ray-traced load. The hang is NVIDIA-specific, so AMD users: the 
+gist author reports --rt crashes RADV — don't use it on AMD.
 
-### Step 1: patch the game
+### Step 1: Patch the Game
 
-Close the game, download `w3_proton_patch.py` from the gist, and run:
+Close the game, then download `w3_proton_patch.py` from
+[the gist](https://gist.github.com/gabrielmaialva33/33ebb2542f0513d55100b22aa2149ff5)
+(pinned to the revision these packages were tested with) and run it:
 
 ```sh
+curl -LO https://gist.githubusercontent.com/gabrielmaialva33/33ebb2542f0513d55100b22aa2149ff5/raw/4a33590af175a1226ec9d376925570e80fd198e4/w3_proton_patch.py
 python3 w3_proton_patch.py --dry-run   # check first: should report 5 sites as "original"
 python3 w3_proton_patch.py --rt        # patch
 ```
+Please note:
+The gist has newer revisions targeting a different vkd3d-proton fix (#3332); 
+use the pinned one above with these packages.
 
 By default it patches
 `~/.local/share/Steam/steamapps/common/The Witcher 3/bin/x64_dx12/witcher3.exe`; pass a
@@ -101,11 +107,11 @@ refuses to touch anything else. It keeps a backup next to the exe — undo with 
 or with Steam's "Verify integrity of game files". **Every game update overwrites the
 patched exe**, so if DLSS or ray tracing grey out again after an update, that's why.
 
-On NixOS without a global Python: `nix shell nixpkgs#python3 -c python3 w3_proton_patch.py --rt`
+Users without a global Python: `nix shell nixpkgs#python3 -c python3 w3_proton_patch.py --rt`
 
-### Step 2: install the patched Proton
+### Step 2: Install the Patched Proton
 
-All three routes give you a compatibility tool that shows up in Steam as
+The first three routes give you a compatibility tool that shows up in Steam as
 **`GE-Proton11-7-rt`**. Its name deliberately differs from stock GE-Proton11-7, so it
 never collides with a regular GE-Proton install.
 
@@ -118,22 +124,31 @@ programs.steam.extraCompatPackages = [
 ];
 ```
 
-**Nix on any other distro** (native Steam) — one command:
+**Nix on any other distro** (native Steam):
 ```sh
+mkdir -p ~/.steam/root/compatibilitytools.d
 nix build github:DanielTallon/nix-packages#proton-ge-w3rt.steamcompattool \
   --out-link ~/.steam/root/compatibilitytools.d/GE-Proton11-7-rt
 ```
-This creates the symlink Steam reads *and* registers it as a garbage-collection root, so
-`nix-collect-garbage` won't delete the tool from under you. Rerun the same command to
-update; delete the symlink to uninstall. Add `--extra-experimental-features "nix-command flakes"`
-if flakes aren't enabled. Don't use `nix profile install` here — the package's default
-output is an empty stub; Steam needs the `.steamcompattool` output.
+Nix appends the output name, so the symlink is created as
+`compatibilitytools.d/GE-Proton11-7-rt-steamcompattool`. That's expected; Steam
+still lists the tool as `GE-Proton11-7-rt`. The symlink is also a garbage-collection
+root, so `nix-collect-garbage` won't delete the tool from under you. Rerun the same
+command to update; to uninstall, delete `GE-Proton11-7-rt-steamcompattool`.
+
+Add `--extra-experimental-features "nix-command flakes"` if flakes aren't enabled.
+Don't use `nix profile install` here — the package's default output is an empty stub;
+Steam needs the `.steamcompattool` output.
+
+Please note: This has only been tested on NixOS only so far; if Steam lists the tool but the game won't launch, use the cp -rL method from the Flatpak section instead (copying into ~/.steam/root/compatibilitytools.d/), and please open an issue.
 
 **Flatpak Steam** — the Flatpak sandbox can't see `/nix/store`, so a symlink won't work.
 Copy the tool in instead (about 1 GB; to update, delete the folder and copy again):
 ```sh
+mkdir -p ~/.var/app/com.valvesoftware.Steam/data/Steam/compatibilitytools.d
 cp -rL "$(nix build github:DanielTallon/nix-packages#proton-ge-w3rt.steamcompattool --no-link --print-out-paths)" \
   ~/.var/app/com.valvesoftware.Steam/data/Steam/compatibilitytools.d/GE-Proton11-7-rt
+chmod -R u+w ~/.var/app/com.valvesoftware.Steam/data/Steam/compatibilitytools.d/GE-Proton11-7-rt
 ```
 
 **Your own Proton instead** (advanced): `vkd3d-proton-w3rt` gives you just the two DLLs.
@@ -144,7 +159,7 @@ Copy `result/bin/d3d12.dll` and `d3d12core.dll` into a *copy* of that Proton, un
 game prefix's DLLs when the `version` changes, so if you skip that, the game keeps running
 the stock DLLs. `proton-ge-w3rt` does all of this for you.
 
-### Step 3: play and verify
+### Step 3: Play and Verify
 
 1. Restart Steam completely (Steam → Exit, not just closing the window), so it rescans
    compat tools.
@@ -157,7 +172,7 @@ To confirm the patched vkd3d-proton is really in use, launch once with
 `PROTON_LOG=1 VKD3D_DEBUG=info PROTON_ENABLE_NVAPI=1 %command%`, load a save with ray
 tracing on, quit, then:
 ```sh
-grep -i 'RTAS prebuild' ~/steam-292030.log   # should print "...multiplied by 8 (local workaround)"
+grep -i 'RTAS prebuild' ~/.var/app/com.valvesoftware.Steam/steam-292030.log   # should print "...multiplied by 8 (local workaround)"
 journalctl -k -b | grep -i 'xid.*witcher'    # should print nothing new
 ```
 Remove the two logging variables afterwards — info-level logging is verbose.
@@ -190,8 +205,7 @@ wrong string).
 
 `boot-gardener` is my own TUI tool with no upstream to track, so this
 doesn't apply — just check back here to get the updated `version`. If you
-have it as a flake input, `nix flake update` (or `nix flake lock
---update-input nix-packages`) pulls in whatever's on `main`.
+have it as a flake input, `nix flake update nix-packages` pulls in whatever's on `main`.
 
 `proton-ge-w3rt` and `vkd3d-proton-w3rt` must always move **together**: the GE-Proton
 `version` in `proton-ge-w3rt.nix` and the vkd3d-proton `rev` in `vkd3d-proton-w3rt.nix`
