@@ -62,7 +62,7 @@ or `--impure` needed.
 
 ## Witcher 3 ray tracing on Proton
 
-**The problem.** The 5.0 ("Remastered") update of *The Witcher 3* checks whether it's
+**The problem.** The new 5.0 ("Remastered") update of *The Witcher 3* checks whether it's
 running under Wine/Proton and, if so, disables DLSS, Frame Generation, Reflex and all
 ray tracing options. Patching that check out re-enables them, but with ray tracing on,
 stock vkd3d-proton then hangs the GPU within about a minute on NVIDIA drivers 590 and
@@ -70,7 +70,7 @@ newer (kernel log: `Xid 109 … CTX SWITCH TIMEOUT`) —
 [vkd3d-proton#3226](https://github.com/HansKristian-Work/vkd3d-proton/issues/3226),
 not fixed upstream at the time of writing.
 
-**The fix** has two parts, and you need both for ray tracing:
+**The personal fix** has two parts, and you need both for ray tracing:
 
 1. **Patch the game executable** with `w3_proton_patch.py` from
    [this gist](https://gist.github.com/gabrielmaialva33/33ebb2542f0513d55100b22aa2149ff5)
@@ -231,6 +231,80 @@ nix-packages/
 └── proton-ge-w3rt/
     └── proton-ge-w3rt.nix
 ```
+**The upstream fix for raytracing** 
+## proton-wineland
+
+[Proton Wineland](https://github.com/nanomatters/proton-cachyos) (a Wayland-focused Proton fork, published from nanomatters/proton-cachyos) packaged as a Steam compatibility tool. This is unofficial packaging of the upstream prebuilt releases.
+
+| Attribute | Build | Needs |
+| --- | --- | --- |
+| `proton-wineland` | `x86_64_v3` (default) | a CPU with AVX2 |
+| `proton-wineland-x86_64` | `x86_64` | any x86_64 CPU |
+
+Not sure about AVX2? `grep -m1 -o avx2 /proc/cpuinfo` prints `avx2` if you have it.
+
+**Stable name in Steam.** Upstream names each release after its version, so Steam forgets a game's tool selection on every update. This package renames it to **Proton-Wineland**, so your per-game choice survives updates.
+
+**Automatic updates.** A daily GitHub Action (`update-proton-wineland`) checks for new `wineland-*` releases, updates `proton-wineland/sources.json`, verifies that both variants build, and commits. To pick up a new version, update this flake input and rebuild.
+
+### NixOS
+
+```nix
+# flake.nix
+inputs.nix-packages.url = "github:DanielTallon/nix-packages";
+
+# configuration
+programs.steam.extraCompatPackages = [
+  inputs.nix-packages.packages.x86_64-linux.proton-wineland
+];
+```
+
+Or with the overlay (`nixpkgs.overlays = [ inputs.nix-packages.overlays.default ];`), use `pkgs.proton-wineland`.
+
+Rebuild, fully restart Steam (Steam → Exit), then pick **Proton-Wineland** under the game's Properties → Compatibility.
+
+Updating:
+
+```sh
+nix flake update nix-packages
+sudo nixos-rebuild switch --flake .
+```
+
+### Other distros with Nix (native Steam)
+
+Steam reads compatibility tools from `~/.local/share/Steam/compatibilitytools.d`. Build the tool and symlink it there:
+
+```sh
+mkdir -p ~/.local/share/Steam/compatibilitytools.d
+nix build github:DanielTallon/nix-packages#proton-wineland^steamcompattool \
+  -o ~/.local/share/Steam/compatibilitytools.d/Proton-Wineland
+```
+
+The `-o` link also acts as a GC root, so `nix-collect-garbage` won't remove it. To update, run the same command again.
+
+### Flatpak Steam
+
+The Flatpak sandbox can't follow symlinks into `/nix/store`, so copy the files instead:
+
+```sh
+dest=~/.var/app/com.valvesoftware.Steam/data/Steam/compatibilitytools.d/Proton-Wineland
+rm -rf "$dest"
+cp -rL "$(nix build github:DanielTallon/nix-packages#proton-wineland^steamcompattool --no-link --print-out-paths)" "$dest"
+chmod -R u+w "$dest"
+```
+
+Repeat these commands to update. (`chmod` makes the copy writable again; Nix store files are read-only, so without it a later `rm` asks about every file.)
+
+### Notes: The Witcher 3 5.x ("Remastered")
+
+Wineland 11.0-20260930 and newer restores DLSS, frame generation, ray tracing and path tracing in The Witcher 3, which the game otherwise disables when it detects Wine. It does this with a per-game Wine setting, so **no exe patching is needed, and game updates don't break it**.
+
+- Use the **stock** `witcher3.exe`. If you previously patched it (for example with a community patch script), run Steam's *Verify integrity of game files* first.
+- Tested on NVIDIA (RTX 4070 SUPER, driver 610): RT and path tracing ran stable for 15+ minutes with these launch options:
+  `MANGOHUD=1 PROTON_ENABLE_NVAPI=1 %command%`
+- Wineland enables Wine's Wayland driver by default. On a multi-monitor setup, the game may open on the wrong display the first time. Moving it to the right screen and setting the resolution once in the game's settings sticks across launches. If windowing misbehaves, `PROTON_ENABLE_WAYLAND=0` falls back to XWayland.
+- This supersedes `proton-ge-w3rt` for The Witcher 3; that package remains available as a fallback.
+
 
 ## License
 
