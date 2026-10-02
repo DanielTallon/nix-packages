@@ -1,0 +1,47 @@
+name: update-proton-wineland
+
+on:
+  schedule:
+    - cron: "0 6 * * *" # daily, 06:00 UTC
+  workflow_dispatch: # "Run workflow" button for manual checks
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Check for a new Wineland release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./proton-wineland/update.sh
+
+      - name: Detect changes
+        id: diff
+        run: |
+          if git diff --quiet -- proton-wineland/sources.json; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Never commit a bump that doesn't build (e.g. upstream renamed the tarball or the vdf).
+      - name: Verify both variants build
+        if: steps.diff.outputs.changed == 'true'
+        # ^* builds every output; plain .#proton-wineland would only build the trivial "out".
+        run: nix build '.#proton-wineland^*' '.#proton-wineland-x86_64^*' --no-link -L
+
+      - name: Commit and push
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          version=$(jq -r .version proton-wineland/sources.json)
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add proton-wineland/sources.json
+          git commit -m "proton-wineland: update to $version"
+          git push
