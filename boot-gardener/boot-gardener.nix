@@ -119,6 +119,11 @@ let
                                          startup; the column shows '?')
       boot-gardener --help               Show this help
 
+    Environment:
+      BOOT_GARDENER_COLORS               Replace the built-in green/blue theme
+                                         with any fzf --color spec
+      NO_COLOR                           Turn off custom colours
+
     The YIELD column estimates how much Nix store space removing that
     generation would free: the combined size of the store paths that only
     that generation uses (nothing else on the system -- no other generation,
@@ -220,6 +225,103 @@ let
       read -rp "Press Enter to return to the list... " _ || true
     }
 
+    # --- Look and feel ----------------------------------------------------------
+    # Greens and blues: green for the things that grow (borders, prompt,
+    # pointer, the highlighted row), blue for the things you read (headers,
+    # filter matches, multi-select marks). Truecolor hex, so it looks the same
+    # whatever the terminal's own palette is. BOOT_GARDENER_COLORS replaces it
+    # wholesale with any fzf --color spec (e.g. "dark", "16", or your own hex
+    # list); NO_COLOR drops the custom colours here and on the splash.
+    GARDEN_FZF_COLORS="fg:#b4cfb0,fg+:#eaf6e2:bold,bg+:#1c3a2f,selected-bg:#183245"
+    GARDEN_FZF_COLORS+=",hl:#6cb6ff,hl+:#9fd3ff:bold,query:#eaf6e2,prompt:#8fd694"
+    GARDEN_FZF_COLORS+=",pointer:#9be564,marker:#6cb6ff,spinner:#7fc8f8,info:#8fb8a3"
+    GARDEN_FZF_COLORS+=",gutter:#1c3a2f,scrollbar:#3f7f5a,separator:#2f5a45"
+    GARDEN_FZF_COLORS+=",border:#3f7f5a,label:#8fd694,list-border:#3f7f5a,list-label:#8fd694"
+    GARDEN_FZF_COLORS+=",input-border:#3a6f8f,input-label:#7fc8f8"
+    GARDEN_FZF_COLORS+=",header:#7fc8e0,header-border:#3a6f8f,header-label:#7fc8f8"
+    GARDEN_FZF_COLORS+=",footer:#8fbf9f,footer-border:#3f7f5a,footer-label:#8fd694"
+    GARDEN_FZF_COLORS+=",preview-fg:#c8dccc,preview-border:#3a6f8f,preview-label:#7fc8f8"
+
+    FZF_THEME_ARGS=()
+    if [[ -z "''${NO_COLOR:-}" ]]; then
+      FZF_THEME_ARGS=(--color "''${BOOT_GARDENER_COLORS:-$GARDEN_FZF_COLORS}")
+    fi
+
+    # Splash shown once, while the first load runs (boot-menu read -- which
+    # may ask for sudo -- and the YIELD closure measurement). Anything those
+    # print, like the sudo prompt or "Measuring YIELD...", lands underneath it.
+    #
+    # The art and its colour mask are two same-shaped blocks: each character in
+    # the mask picks the colour of the character in the same spot in the art.
+    #   b l s c a w  blossoms (blue, periwinkle, sky, cyan, aqua, pale)
+    #   y            flower centres     g  stems and leaves
+    #   d            grass              e  soil
+    # Edit both together and keep them lined up.
+    show_garden_splash() {
+      [[ -t 1 ]] || return 0
+      local -a art mask
+      mapfile -t art <<'ART'
+                           .-.                     .--.
+        _/\_       \|/    ( o )      _/\_         ( {} )
+       (    )     --*--    `|'      (    )   .-.   '--'
+        \__/   o   /|\      |   o    \__/   ( o )   ||
+         ||    |    |       |/  |     ||     `|'    ||
+       \ || /  |    |/     \|   |     ||      |    \||
+        \||/   |   \|       |   |    \||/    \|     ||/
+     ,;.,||,;,.|,;,.|,;,.;,.|,;,|,;,.,;||,;,.;|,;,.,||,;,.
+     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    ART
+      mapfile -t mask <<'MASK'
+                           www                     llll
+        bbbb       ccc    w y w      llll         l yy l
+       b    b     ccycc    wgw      l    l   aaa   llll
+        bbbb   s   ccc      g   s    llll   a y a   gg
+         gg    g    g       gg  g     gg     aga    gg
+       g gg g  g    gg     gg   g     gg      g    ggg
+        gggg   g   gg       g   g    gggg    gg     ggg
+     ddddggddddgddddgdddddddgdddgddddddggdddddgdddddggdddd
+     eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+    MASK
+
+      local -A ink=()
+      local reset=""
+      if [[ -z "''${NO_COLOR:-}" ]]; then
+        ink=(
+          [b]=$'\033[38;2;79;163;224m'
+          [l]=$'\033[38;2;140;158;255m'
+          [s]=$'\033[38;2;108;182;255m'
+          [c]=$'\033[38;2;95;215;215m'
+          [a]=$'\033[38;2;127;219;202m'
+          [w]=$'\033[38;2;207;232;255m'
+          [y]=$'\033[38;2;242;229;166m'
+          [g]=$'\033[38;2;106;191;105m'
+          [d]=$'\033[38;2;63;154;90m'
+          [e]=$'\033[38;2;74;102;112m'
+        )
+        reset=$'\033[0m'
+      fi
+
+      local i j ch m mrow prev line
+      printf '\033[H\033[2J\n'
+      for i in "''${!art[@]}"; do
+        mrow="''${mask[i]:-}"
+        line="  "
+        prev=""
+        for ((j = 0; j < ''${#art[i]}; j++)); do
+          ch="''${art[i]:j:1}"
+          m="''${mrow:j:1}"
+          [[ -n "$m" ]] || m=" "
+          if [[ "$m" != "$prev" ]]; then
+            line+="''${reset}''${ink[$m]:-}"
+            prev="$m"
+          fi
+          line+="$ch"
+        done
+        printf '%s%s\n' "$line" "$reset"
+      done
+      printf '\n  %sTending the garden -- reading your generations...%s\n\n' "''${ink[d]:-}" "$reset"
+    }
+
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --list)
@@ -282,6 +384,7 @@ let
     fi
 
     require fzf
+    show_garden_splash
     backend_init "$BOOTLOADER_OVERRIDE"
     # Always pass the resolved bootloader through to the rescue script
     # explicitly, rather than letting it auto-detect a second time -- keeps
@@ -922,7 +1025,8 @@ let
             --header-first \
             --header-lines=1 \
             --header "$HEADER_TEXT" \
-            --border-label ' Gardener ' \
+            --border-label ' 🌱 Gardener ' \
+            "''${FZF_THEME_ARGS[@]}" \
             --footer "$FOOTER_TEXT" \
             --multi \
             --bind 'q:abort' \
@@ -2219,7 +2323,7 @@ let
 in
 stdenvNoCC.mkDerivation {
   pname = "boot-gardener";
-  version = "2.6.0";
+  version = "2.7.0";
 
   dontUnpack = true;
   dontBuild = true;
