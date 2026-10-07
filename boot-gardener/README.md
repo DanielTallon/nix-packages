@@ -92,7 +92,7 @@ boot-gardener --bootloader systemd-boot
 # Skip the YIELD column (faster startup)
 boot-gardener --no-yield
 
-# Swap in your own colours, or turn custom colours off
+# Swap in your own colors, or turn custom colors off
 BOOT_GARDENER_COLORS=dark boot-gardener
 NO_COLOR=1 boot-gardener
 ```
@@ -209,17 +209,17 @@ the garden. `--no-yield` skips the measuring entirely and the column shows
 
 The list uses a green-and-blue theme: green for structure (borders,
 prompt, the cursor's pointer bar and row highlight), blue for things you
-read (header, filter matches, multi-select marks). Colours are truecolor
+read (header, filter matches, multi-select marks). Colors are truecolor
 hex, so they look the same whatever your terminal's own palette is, and the
 background is left unset so a translucent terminal still shows through.
 
-Nothing in the list depends on telling colours apart. The current row is
+Nothing in the list depends on telling colors apart. The current row is
 also bold and is the only one with a bright pointer bar; marked rows have a
 marker glyph; the `BOOT` column uses `✓`/`-`; pins use 📌. The theme was
 tuned for brightness contrast rather than hue alone, so it should stay
-readable with colour-vision deficiencies.
+readable with color-vision deficiencies.
 
-While the first load runs, a coloured ASCII flower garden is shown, with
+While the first load runs, a colored ASCII flower garden is shown, with
 anything printed during loading (the `sudo` prompt, the bootloader-detection
 note, `Measuring YIELD...`) appearing underneath it. It's skipped when
 output isn't a terminal.
@@ -229,7 +229,7 @@ Two environment variables change this:
 | Variable | Effect |
 |---|---|
 | `BOOT_GARDENER_COLORS` | Replaces the whole theme with any [fzf `--color` spec](https://junegunn.github.io/fzf/reference/#color) — a base scheme (`dark`, `light`, `16`, `bw`) and/or a comma-separated list like `fg:#c0c0c0,hl:#ffaf00` |
-| `NO_COLOR` | Any non-empty value turns off the custom theme and the garden's colours (the [no-color.org](https://no-color.org) convention) |
+| `NO_COLOR` | Any non-empty value turns off the custom theme and the garden's colors (the [no-color.org](https://no-color.org) convention) |
 
 The theme needs fzf 0.63 or newer, the same version the picker's
 `--footer` already needs; the package's own fzf from nixpkgs is newer than
@@ -466,8 +466,8 @@ at build time. Inside them, a few characters need Nix escaping:
 A bare `$VAR` needs no escaping.
 
 The loading-screen garden in `gardener.sh` (`show_garden_splash`) is two
-same-shaped heredocs: the art itself, and a colour mask where each letter
-picks the colour of the character in the same position (the letters are
+same-shaped heredocs: the art itself, and a color mask where each letter
+picks the color of the character in the same position (the letters are
 listed in a comment above the function). Edit both together and keep them
 lined up. The fzf theme is the `GARDEN_FZF_COLORS` string just above it.
 

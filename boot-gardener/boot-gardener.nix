@@ -122,7 +122,7 @@ let
     Environment:
       BOOT_GARDENER_COLORS               Replace the built-in green/blue theme
                                          with any fzf --color spec
-      NO_COLOR                           Turn off custom colours
+      NO_COLOR                           Turn off custom colors
 
     The YIELD column estimates how much Nix store space removing that
     generation would free: the combined size of the store paths that only
@@ -231,7 +231,7 @@ let
     # filter matches, multi-select marks). Truecolor hex, so it looks the same
     # whatever the terminal's own palette is. BOOT_GARDENER_COLORS replaces it
     # wholesale with any fzf --color spec (e.g. "dark", "16", or your own hex
-    # list); NO_COLOR drops the custom colours here and on the splash.
+    # list); NO_COLOR drops the custom colors here and on the splash.
     GARDEN_FZF_COLORS="fg:#b4cfb0,fg+:#eaf6e2:bold,bg+:#1c3a2f,selected-bg:#183245"
     GARDEN_FZF_COLORS+=",hl:#6cb6ff,hl+:#9fd3ff:bold,query:#eaf6e2,prompt:#8fd694"
     GARDEN_FZF_COLORS+=",pointer:#9be564,marker:#6cb6ff,spinner:#7fc8f8,info:#8fb8a3"
@@ -251,8 +251,8 @@ let
     # may ask for sudo -- and the YIELD closure measurement). Anything those
     # print, like the sudo prompt or "Measuring YIELD...", lands underneath it.
     #
-    # The art and its colour mask are two same-shaped blocks: each character in
-    # the mask picks the colour of the character in the same spot in the art.
+    # The art and its color mask are two same-shaped blocks: each character in
+    # the mask picks the color of the character in the same spot in the art.
     #   b l s c a w  blossoms (blue, periwinkle, sky, cyan, aqua, pale)
     #   y            flower centres     g  stems and leaves
     #   d            grass              e  soil
