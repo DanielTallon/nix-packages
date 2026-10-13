@@ -7,6 +7,7 @@ use and shared here in case they're useful to anyone else:
 - **[`kenku-fm`](./kenku-fm)** — [Kenku FM](https://www.kenku.fm/), an offline-capable text-to-speech and soundboard app for tabletop audio. Built from upstream's `.deb` release. You can check out their GitHub [here](https://github.com/owlbear-rodeo/kenku-fm). Kenku-FM is proprietary/unfree.
 - **[`boot-gardener`](https://github.com/DanielTallon/nix-packages/blob/main/boot-gardener)** — Boot Gardener, a bash (`jq` + `fzf`) tool for NixOS to pick, pin, prune, harvest, or garbage-collect boot-menu generations on Limine, systemd-boot, or GRUB, plus a rescue mode for a full `/boot` partition. Own project, MIT licensed.
 - **[`proton-wineland`](./proton-wineland)** — [Proton Wineland](https://github.com/nanomatters/proton-cachyos), a Wayland-focused Proton fork, packaged as a Steam compatibility tool. Restores DLSS, frame generation and ray/path tracing in *The Witcher 3* 5.x with no exe patching. x86_64-linux only. See [proton-wineland](#proton-wineland) below.
+- **[`nixed-error`](./nixed-error)** — explains a failed NixOS rebuild in plain words: what went wrong, the file and line, whether it's your config, upstream, or your machine, and how to fix it. Rule-based (no LLM, no network). Own project, still in testing.
 
 Each package is exposed on its own — installing or building one never pulls in the others.
 
@@ -17,19 +18,26 @@ Each package is exposed on its own — installing or building one never pulls in
 nix run github:DanielTallon/nix-packages#lgl-papercutter
 nix run github:DanielTallon/nix-packages#kenku-fm
 nix run github:DanielTallon/nix-packages#boot-gardener
+nix run github:DanielTallon/nix-packages#nixed-error
 ```
 **Run without installing, and without flakes enabled:**
 ```sh
 nix run --extra-experimental-features "nix-command flakes" github:DanielTallon/nix-packages#lgl-papercutter
 nix run --extra-experimental-features "nix-command flakes" github:DanielTallon/nix-packages#kenku-fm
 nix run --extra-experimental-features "nix-command flakes" github:DanielTallon/nix-packages#boot-gardener
+nix run --extra-experimental-features "nix-command flakes" github:DanielTallon/nix-packages#nixed-error
 ```
+
+`nixed-error` with no arguments re-evaluates your system config and explains what fails.
+To explain output you already have, pipe it in:
+`sudo nixos-rebuild switch 2>&1 | nix run github:DanielTallon/nix-packages#nixed-error`.
 
 **Install just one:**
 ```sh
 nix profile install github:DanielTallon/nix-packages#lgl-papercutter
 nix profile install github:DanielTallon/nix-packages#kenku-fm
 nix profile install github:DanielTallon/nix-packages#boot-gardener
+nix profile install github:DanielTallon/nix-packages#nixed-error
 ```
 
 (`proton-wineland` is a Steam compatibility tool, not a program you run or install
@@ -49,7 +57,7 @@ inputs.nix-packages.url = "github:DanielTallon/nix-packages";
 
 nixpkgs.overlays = [ inputs.nix-packages.overlays.default ];
 # now available anywhere in your config as pkgs.lgl-papercutter / pkgs.kenku-fm /
-# pkgs.boot-gardener / pkgs.proton-wineland
+# pkgs.boot-gardener / pkgs.proton-wineland / pkgs.nixed-error
 ```
 
 ## A note on `kenku-fm`
@@ -77,6 +85,10 @@ wrong string).
 doesn't apply — just check back here to get the updated `version`. If you
 have it as a flake input, `nix flake update nix-packages` pulls in whatever's on `main`.
 
+`nixed-error/nixed-error.nix` is generated from the nixed-error project
+(`export-nix.py` there), so regenerate it rather than editing the embedded
+script by hand.
+
 `proton-wineland` updates itself: a daily GitHub Action bumps
 `proton-wineland/sources.json` (see its section below), so there's nothing to do
 by hand beyond `nix flake update nix-packages`.
@@ -92,6 +104,8 @@ nix-packages/
 │   └── kenku-fm.nix
 ├── boot-gardener/
 │   └── boot-gardener.nix
+├── nixed-error/
+│   └── nixed-error.nix
 └── proton-wineland/
     ├── proton-wineland.nix
     ├── sources.json
