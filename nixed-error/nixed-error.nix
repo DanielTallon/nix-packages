@@ -364,10 +364,12 @@ let
         loc: Loc | None = None
         others: list[Loc] = field(default_factory=list)
         nix_said: str = ""
+        said_by: str = "Nix"
         suggest: str = ""
         context: str = ""
         note: str = ""
         log_tail: list[str] = field(default_factory=list)
+        log_label: str = "the build log"
         cause: Report | None = None
         source: str = ""
         saved_to: Path | None = None
@@ -1231,6 +1233,279 @@ let
         rep.others = []
 
 
+    # ─── wrong kind of value for an option ──────────────────────────────────────
+
+    def value_kind(v: str) -> str:
+        """What kind of value Nix printed under "Definition values:"."""
+        v = v.strip()
+        if v.startswith(('"', "'''")):
+            return "string"
+        if v.startswith("["):
+            return "list"
+        if v.startswith("{"):
+            return "attribute set"
+        if v in ("true", "false"):
+            return "boolean"
+        if re.fullmatch(r"-?\d+", v):
+            return "integer"
+        if re.fullmatch(r"-?\d+\.\d*", v):
+            return "number"
+        if v == "null":
+            return "null"
+        if v.startswith(("<derivation", "«derivation")):
+            return "package"
+        if v.startswith(("<function", "«lambda")):
+            return "function"
+        if v.startswith("/"):
+            return "path"
+        return ""
+
+
+    def wanted_kind(desc: str) -> str:
+        """The kind an option's type description asks for, ignoring a leading "null or"."""
+        d = re.sub(r"^(?:null or )+", "", desc)
+        if d.startswith("list of"):
+            return "list"
+        if d.startswith(("attribute set", "submodule", "lazy attribute set")):
+            return "attribute set"
+        if d.startswith("one of "):
+            return "enum"
+        if d == "boolean":
+            return "boolean"
+        if "integer" in d.split(" or ")[0]:
+            return "integer"
+        if d == "package":
+            return "package"
+        if d.startswith("path"):
+            return "path"
+        if re.match(r"(?:non-empty |single-line |strings? |string\b|lines\b|separated string|Concatenated string)", d):
+            return "string"
+        return ""
+
+
+    def h_option_type(rep: Report, vars: dict, flake: Flake, rules, text: str) -> None:
+        """Say what the option wants, what it got, and the corrected line when that's clear."""
+        option, desc = vars.get("option", ""), vars.get("type", "")
+        defs = textwrap.dedent(vars.get("definitions", ""))
+        m = re.match(r"- In `[^']+':\s*(?P<v>.*(?:\n(?!- In ).*)*)", defs.strip())
+        given = textwrap.dedent(m["v"]).strip() if m else ""
+        got, want = value_kind(given), wanted_kind(desc)
+        one_line = " ".join(given.split())
+        shown = f" (`{one_line}`)" if one_line and len(one_line) < 40 else ""
+        vars["explain_text"] = f"`{option}` expects {desc}, but you gave it {('a ' + got) if got else 'something else'}{shown}."
+        generic = ("Change the value on line {line} to the expected kind. What you gave:\n" + vars.get("definitions", ""))
+        vars["fix_text"] = generic.replace("{line}", str(rep.loc.line) if rep.loc and rep.loc.line else "?")
+
+        # The line as written, split into `name =`, value, `;`
+        lines = read_lines(rep.loc.origin.real) if rep.loc else []
+        src = lines[rep.loc.line - 1] if lines and rep.loc.line and rep.loc.line <= len(lines) else ""
+        am = re.match(r"^(?P<pre>\s*[^=#]+?=\s*)(?P<val>.+?)(?P<post>\s*;\s*(?:#.*)?)$", src)
+        val = am["val"] if am and vars.get("opt_last", "\0") in am["pre"] else None
+        unquoted = val.strip('"') if val and re.fullmatch(r'"[^"]*"', val) else None
+
+        advice, new = "", None
+        if want == "boolean":
+            advice = "Use `true` or `false`, without quotes."
+            if unquoted is not None:
+                word = unquoted.lower()
+                if word in ("yes", "true", "on", "1", "enable", "enabled"):
+                    new = "true"
+                elif word in ("no", "false", "off", "0", "disable", "disabled"):
+                    new = "false"
+        elif want == "string" and got == "list":
+            advice = "It's a list (`[ ]`), but a single string is wanted. Remove the brackets."
+            if val and (lm := re.fullmatch(r"\[\s*(\"[^\"]*\")\s*\]", val)):
+                new = lm[1]
+        elif want == "string" and got in ("integer", "number", "boolean"):
+            advice = "Put it in quotes."
+            new = f'"{val}"' if val and not val.startswith('"') else None
+        elif want == "list" and got and got != "list":
+            advice = "This option holds a list, even for a single item. Wrap it in `[ ]`."
+            new = f"[ {val} ]" if val else None
+        elif want == "integer" and got == "string":
+            advice = "Write the number without quotes."
+            new = unquoted if unquoted and re.fullmatch(r"-?\d+", unquoted) else None
+        elif want == "package" and got == "string":
+            advice = "Use the package itself (`pkgs.name`), not its name in quotes."
+            new = f"pkgs.{unquoted}" if unquoted and re.fullmatch(r"[\w.-]+", unquoted) else None
+        elif want == "enum":
+            advice = f"Use one of the allowed values: {re.sub(r'^(?:null or )*one of ', ''', desc)}."
+        elif want == "attribute set" and got == "list":
+            advice = "Use `{ name = value; }`, not a list `[ ]`."
+        elif want == "path" and got == "string" and unquoted and not unquoted.startswith("/"):
+            advice = "Use an absolute path (starting with `/`), or a path relative to this file without quotes (`./file`)."
+        if advice:
+            at = f"On line {rep.loc.line}: " if rep.loc and rep.loc.line else ""
+            vars["fix_text"] = at + advice[0].lower() + advice[1:] if at else advice
+            if new is not None and am:
+                vars["fix_text"] += f"\n    {(am['pre'] + new + am['post']).strip()}"
+        elif got:
+            vars["note"] = ("Typical mix-ups: a list `[ ]` where a single value is wanted (or the reverse), a missing "
+                            "pair of quotes, or `true` written as `\"true\"`.")
+
+
+    # ─── a service failed while switching ───────────────────────────────────────
+
+    UNIT_EXIT_RE = re.compile(r"code=(?P<code>\w+), status=(?P<status>\d+|\w+)(?:/(?P<sname>[\w-]+))?")
+    UNIT_RESULT_RE = re.compile(r"Failed with result '(?P<result>[\w-]+)'")
+    UNIT_EXEC_RE = re.compile(r"ExecStart=(?P<exe>\S+)")
+    # a journal line as `systemctl status` prints it: `Oct 13 22:31:03 nixos bash[6797]: something broke`
+    STATUS_JOURNAL_RE = re.compile(r"^\s*\w{3} [ \d]\d [\d:]{8} \S+ (?P<ident>[^\s\[:]+)(?:\[\d+\])?: (?P<msg>.*)$", re.M)
+    # and as `journalctl -o short-unix` prints it: `1760409063.123456 nixos bash[6797]: something broke`
+    UNIX_JOURNAL_RE = re.compile(r"^(?P<ts>\d+\.\d+) \S+ (?P<ident>[^\s\[:]+)(?:\[\d+\])?: (?P<msg>.*)$", re.M)
+    UNIT_KINDS = {"service": "services", "timer": "timers", "socket": "sockets", "path": "paths"}
+
+
+    def unit_journal(unit: str, user: bool, text: str) -> list[tuple[float | None, str, str]]:
+        """(time, who, message) for the unit's last run: from the journal, else from `systemctl status` in the text."""
+        entries: list[tuple[float | None, str, str]] = []
+        try:
+            out = run(["journalctl", "-b", "--user-unit" if user else "-u", unit, "-n", "60", "--no-pager",
+                       "-o", "short-unix"], timeout=10).stdout
+            entries = [(float(m["ts"]), m["ident"], m["msg"]) for m in UNIX_JOURNAL_RE.finditer(out)]
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        if not entries:
+            entries = [(None, m["ident"], m["msg"]) for m in STATUS_JOURNAL_RE.finditer(text)]
+        starts = [i for i, (_, who, msg) in enumerate(entries) if who == "systemd" and msg.startswith("Start")]
+        return entries[starts[-1]:] if starts else entries
+
+
+    def unit_show(unit: str, user: bool, prop: str) -> str:
+        try:
+            return run(["systemctl", *(["--user"] if user else []), "show", "-P", prop, "--timestamp=unix", unit],
+                       timeout=10).stdout.strip()
+        except (OSError, subprocess.TimeoutExpired):
+            return ""
+
+
+    def when(ts: float) -> str:
+        t = time.localtime(ts)
+        return time.strftime("%H:%M" if t[:3] == time.localtime()[:3] else "%B %-d, %H:%M", t)
+
+
+    def unit_reason(code: str, status: str, sname: str, result: str, exe: str) -> tuple[str, str]:
+        """(what went wrong, what to do) from systemd's exit code and result."""
+        prog = f"`{exe}`" if exe else "its program"
+        if status == "203" or sname == "EXEC":
+            return (f"systemd couldn't run {prog}: it doesn't exist or isn't executable.",
+                    "Check the path in `ExecStart`. On NixOS, programs live in the Nix store: write "
+                    "`''${pkgs.foo}/bin/foo` (or use `script = '''…'''`), not `/usr/bin/foo`.")
+        if status == "217" or sname == "USER":
+            return "the user it should run as (`User=`) doesn't exist.", "Create the user, or fix `User=`."
+        if status == "200" or sname == "CHDIR":
+            return "its working directory (`WorkingDirectory=`) doesn't exist.", "Create that folder, or fix `WorkingDirectory=`."
+        if result == "oom-kill":
+            return "it ran out of memory and was killed.", "Give it less to do, or the machine more memory or swap."
+        if result == "timeout":
+            return "it took too long to start, so systemd gave up on it.", "Check what it waits for, or raise `TimeoutStartSec`."
+        if result == "start-limit-hit":
+            return ("it failed and was restarted too often in a short time, so systemd stopped trying.",
+                    "The first failure's cause is further up in its log.")
+        if code in ("killed", "dumped"):
+            crash = " (it crashed)" if code == "dumped" or sname in ("SEGV", "ABRT", "BUS", "ILL") else ""
+            return f"it was stopped by signal {sname or status}{crash}.", ""
+        if code == "exited" and status not in ("0", ""):
+            return (f"{prog} ran, but exited with status {status}: the program itself reported an error.",
+                    "Its own messages, if it printed any, are in the log above.")
+        return "", ""
+
+
+    def h_unit(rep: Report, vars: dict, flake: Flake, rules, text: str) -> None:
+        """A unit in a failed state after switching: its log, why it failed, where you define it, and when it failed."""
+        unit = vars.get("unit") or re.split(r"[,\s]+", vars.get("units", "").strip())[0]
+        user = bool(vars.get("user"))
+        vars["unit"] = unit
+        base, _, suffix = unit.rpartition(".")
+        base, suffix = (base, suffix) if suffix in UNIT_KINDS else (unit, "service")
+        rep.said_by, rep.log_label = "systemd", f"{unit}'s log"
+
+        # why: systemd's own lines from its last run (or `systemctl status` output pasted in)
+        entries = unit_journal(unit, user, text)
+        said = [f"{msg}" for _, who, msg in entries if who == "systemd" and (UNIT_EXIT_RE.search(msg) or UNIT_RESULT_RE.search(msg))]
+        ownlines = [msg for _, who, msg in entries if who != "systemd"]
+        rep.log_tail = ownlines[-15:]
+        rep.nix_said = "\n".join(said[-2:])  # nothing from systemd: say nothing, rather than our own words
+        blob = "\n".join(said) + "\n" + text
+        ex = UNIT_EXIT_RE.search(blob)
+        res = UNIT_RESULT_RE.search(blob)
+        exe = (m["exe"] if (m := UNIT_EXEC_RE.search(text)) else
+               m[1] if (m := re.search(r"path=(\S+)", unit_show(unit, user, "ExecStart"))) else "")
+        why, todo = unit_reason(ex["code"] if ex else "", ex["status"] if ex else "", (ex["sname"] or "") if ex else "",
+                                res["result"] if res else "", STORE_HASH_RE.sub("…/", exe))
+
+        # where: your own `systemd.services.foo`, else a module you enabled
+        kind = ("systemd.user." if user else "systemd.") + UNIT_KINDS[suffix]
+        name = re.escape(base.split("@")[0])
+        defined = flake.find([rf'\b{re.escape(kind)}\.(?:"{name}"|{name})(?![\w-])'], regex=True)
+        enabled = None if defined else flake.find(
+            [rf"\b(?:services|programs)\.{name}\.enable\s*=\s*true\b", rf"\b(?:services|programs)\.{name}\s*=\s*\{{"], regex=True)
+        exec_line = None
+        if defined:
+            lines = read_lines(defined.origin.real)
+            indent = len(lines[defined.line - 1]) - len(lines[defined.line - 1].lstrip())
+            for i in range(defined.line - 1, min(len(lines), defined.line + 40)):
+                if i >= defined.line and lines[i].strip() and len(lines[i]) - len(lines[i].lstrip()) <= indent:
+                    break
+                if re.search(r"\b(?:ExecStart|script|preStart)\s*=", lines[i].split("#")[0]):
+                    exec_line = i + 1
+                    break
+            rep.loc = Loc(defined.origin, exec_line) if exec_line else defined
+            rep.blame = "you"
+        elif enabled:
+            rep.loc = enabled
+
+        # when: during the switch you just piped in, during your last switch, or earlier
+        load = unit_show(unit, user, "LoadState")
+        failed_at = next((ts for ts, who, msg in reversed(entries) if ts and who == "systemd" and msg.startswith(("Failed", f"{unit}: Failed"))), None)
+        try:
+            switched = os.lstat("/run/current-system").st_mtime
+        except OSError:
+            switched = None
+        in_switch = bool(re.search(r"the following units failed:", text))
+        # systemd doesn't know it, and neither your config nor the switch you piped in mention it
+        leftover = load == "not-found" and not (in_switch or defined or enabled)
+        recent = ""
+        if in_switch:
+            recent = "It failed while switching to your new config."
+        elif leftover:
+            recent = (f"Its unit file no longer exists: it's left over from an earlier generation, and has nothing to do "
+                      f"with your current config.")
+        elif failed_at and switched:
+            recent = (f"It failed during your last switch ({when(switched)})." if failed_at >= switched - 5 else
+                      f"It failed at {when(failed_at)}, before your last switch ({when(switched)}), so it may have nothing "
+                      "to do with your latest change: a switch only restarts services whose definition changed.")
+
+        explain = f"Your config built fine, but the {'user ' if user else '''}service `{unit}` failed"
+        explain += f": {why}" if why else "."
+        if defined:
+            explain += f" You define it yourself, on line {defined.line} of {defined.origin.display}."
+        elif enabled:
+            explain += (f" It isn't written in your files: it comes from the NixOS module you turn on on line {enabled.line} "
+                        f"of {enabled.origin.display}.")
+        if not rep.log_tail and entries:
+            explain += " It printed nothing before failing."
+        vars["explain_text"] = explain + (f"\n\n{recent}" if recent else "")
+        others = re.findall(r"^also failed: (\S+)", text, re.M) + [
+            u for u in re.split(r"[,\s]+", vars.get("units", "").strip()) if u and u != unit]
+        if others:
+            vars["explain_text"] += f"\n\nAlso failed: {', '.join(f'`{o}`' for o in others)}."
+
+        jflag = "--user-unit" if user else "-u"
+        fix = []
+        if leftover:
+            fix.append(f"Clear the old failure:\n    sudo systemctl reset-failed {unit}")
+        else:
+            if defined and exec_line:
+                fix.append(f"Look at line {exec_line} of {defined.origin.display}, the command the service runs. {todo}".strip())
+            elif todo:
+                fix.append(todo)
+            if defined:
+                fix.append("If you're not sure the service is needed, remove it or set `wantedBy = [ ];` so it doesn't start.")
+            fix.append(f"Full log:\n    journalctl -b {jflag} {unit}")
+        vars["fix_text"] = "\n\n".join(fix)
+
+
     HANDLERS = {
         "semicolon": h_semicolon, "brackets": h_brackets, "build": h_build,
         "module_arg": h_module_arg, "assertion": h_assertion, "stray_closer": h_stray_closer,
@@ -1242,6 +1517,8 @@ let
         "missing_module": h_missing_module,
         "hm_file": h_hm_file,
         "unfree": h_unfree,
+        "option_type": h_option_type,
+        "unit": h_unit,
     }
 
 
@@ -1336,18 +1613,17 @@ let
         if logged:
             _, drv = max(logged)
             return (f"error: Cannot build '{drv}'.\n       Reason: builder failed "
-                    f"(log kept from the last attempt).\n"), how + " (evaluation is fine; found a failed build log)"
+                    f"(log kept from the last attempt).\n"), how + "; it evaluates, so used a failed build log"
 
-        # Builds fine too: maybe the switch itself (activation) failed.
+        # Builds fine too: maybe the switch itself (activation) failed. The unit handler reads the journal.
         units = []
-        for scope in ([], ["--user"]):
-            out = run(["systemctl", *scope, "--failed", "--no-legend", "--plain"], timeout=10).stdout
+        for scope in ("", "user "):
+            out = run(["systemctl", *(["--user"] if scope else []), "--failed", "--no-legend", "--plain"], timeout=10).stdout
             units += [(scope, l.split()[0]) for l in out.splitlines() if l.strip()]
         if units:
             scope, unit = next((u for u in units if "home-manager" in u[1]), units[0])
-            jflag = "--user-unit" if scope else "-u"
-            journal = run(["journalctl", "-b", jflag, unit, "-n", "40", "--no-pager", "-o", "cat"], timeout=10).stdout
-            return f"error: unit {unit} failed\n{journal}", how + f" (builds fine; checked the failed unit {unit})"
+            also = "".join(f"\nalso failed: {u}" for _, u in units if u != unit)
+            return f"error: {scope}unit {unit} failed{also}\n", how + f"; it builds, so checked the failed unit {unit}"
         return None, how
 
 
@@ -1397,7 +1673,7 @@ let
 
 
     BLAME = {
-        "you": ("31", "Your config", "something in your own files"),
+        "you": ("36", "Your config", "something in your own files"),
         "upstream": ("35", "Upstream", "not something you typed"),
         "system": ("33", "Your machine", "disk, network or permissions, not your config"),
         "unknown": ("2", "Unclear", "couldn't tell whose it is"),
@@ -1483,7 +1759,7 @@ let
             # make every line wrap and say nothing to a reader. -v keeps them.
             short = [l if verbose else STORE_HASH_RE.sub("…/", l) for l in tail]
             shortened = short != tail
-            print(c("2", "  End of the build log" + (" (store paths shortened; -v for full):" if shortened else ":")))
+            print(c("2", f"  End of {rep.log_label}" + (" (store paths shortened; -v for full):" if shortened else ":")))
             for l in short:
                 print(c("2", "    > ") + l[:200])
         if rep.suggest:
@@ -1493,10 +1769,13 @@ let
             print()
             print(c("32;1", "  Fix"))
             print(wrap(rep.fix, "    "))
-        if rep.nix_said and (verbose or rep.rule_id is None or len(rep.nix_said) < 400):
+        # Nix's first paragraph: a message ending in "Definition values:" needs the lines after it to make sense.
+        said = rep.nix_said if verbose or rep.rule_id is None else rep.nix_said.split("\n\n")[0]
+        if not verbose and rep.rule_id and len(lines := said.splitlines()) > 6:
+            said = "\n".join(lines[:6] + ["…"])
+        if said and (verbose or rep.rule_id is None or len(said) < 400):
             print()
-            print(c("2", "  What Nix said:"))
-            said = rep.nix_said if verbose or rep.rule_id is None else rep.nix_said.splitlines()[0]
+            print(c("2", f"  What {rep.said_by} said:"))
             print(c("2", textwrap.indent(said, "    ")))
         if rep.saved_to:
             print()
@@ -1505,6 +1784,17 @@ let
         print()
         if rep.source:
             print(c("2", f"  ({rep.source})"))
+
+
+    def pipe_hint(switch: str) -> str:
+        """`<switch> 2>&1 | nixed-error`, with how to call nixed-error when it isn't installed (`nix run …`)."""
+        if shutil.which("nixed-error"):
+            return f"\n    {switch} 2>&1 | nixed-error\n"
+        if run_cmd := os.environ.get("NIXED_ERROR_RUN"):
+            return f"\n    {switch} 2>&1 | {run_cmd}\n"
+        return (f"\n    {switch} 2>&1 | nix run <flake>#nixed-error\n\n"
+                + wrap("(nixed-error isn't installed, so use the same `nix run …` command you started it with.)", "  ")
+                + "\n")
 
 
     def save_unknown(text: str) -> Path | None:
@@ -1559,7 +1849,7 @@ let
                 print(c("33", "\n? Couldn't find your config to re-check."))
                 print(wrap(f"{cfg.problem} Point nixed-error at it with --config (a flake folder, path#host, or "
                            "a configuration.nix), or pipe in the output of the failed rebuild:", "  "))
-                print("\n    sudo nixos-rebuild switch 2>&1 | nixed-error\n")
+                print(pipe_hint("sudo nixos-rebuild switch"))
                 return 2
             text, source = reproduce(cfg)
             if text is None:
@@ -1569,7 +1859,7 @@ let
                 print(wrap("Your config evaluates, nothing that needs building has a failed log, and no "
                            "systemd units are in a failed state. If the rebuild failed while switching "
                            "(for example installing the bootloader), pipe its output in instead:", "  "))
-                print(f"\n    {switch} 2>&1 | nixed-error\n")
+                print(pipe_hint(switch))
                 return 0
 
         flake = Flake(str(cfg.dir) if cfg.dir else None, load_inputs=not args.rule_id and cfg.kind == "flake")
@@ -1821,9 +2111,9 @@ let
     blame = "you"
     locate = ["{{opt_tail2}}", "{{opt_last}}"]
     explain = """
-    NixOS has no option called `{{option}}`. Either it's misspelled, it was renamed or removed in your
-    NixOS version, or it belongs to a module you haven't imported (a home-manager option in your NixOS
-    config, or the other way round, is a classic).
+    NixOS has no option called `{{option}}`. It may be misspelled, or renamed or removed in your NixOS
+    version. Or it belongs to a module you haven't imported: a common case is a home-manager option in a
+    NixOS config, or the reverse.
     """
     fix = "Fix the name on line {{line}}. Look it up on search.nixos.org/options, or with `man configuration.nix`."
 
@@ -1857,15 +2147,13 @@ let
     priority = 80
     blame = "you"
     locate = ["{{opt_tail2}}", "{{opt_last}}"]
+    handler = "option_type"
     explain = """
-    `{{option}}` expects: {{type}}.
-    The value you gave is something else. Typical mix-ups: a list `[ ]` where a single string is wanted (or
-    the reverse), a missing pair of quotes, or `true` written as `"true"`.
+    {{explain_text}}
+
+    {{note}}
     """
-    fix = """
-    Change the value on line {{line}} to the expected kind. What you gave:
-    {{definitions}}
-    """
+    fix = "{{fix_text}}"
 
     [[rule]]
     id = "option-conflict"
@@ -2260,14 +2548,12 @@ let
     [[rule]]
     id = "unit-failed"
     title = "A service failed after switching"
-    match = ''''^error: unit (?P<unit>\S+) failed''''
+    match = ''''(?:^error: (?P<user>user )?unit (?P<unit>\S+) failed|the following units failed: (?P<units>[^\n]+))''''
     priority = 5
     blame = "unknown"
-    explain = """
-    Your config built fine, but the service `{{unit}}` is in a failed state. It may or may not be from your last
-    rebuild. The end of its log is shown below.
-    """
-    fix = "See the full log with `journalctl -b -u {{unit}}` (or `--user-unit` for user services)."
+    handler = "unit"
+    explain = "{{explain_text}}"
+    fix = "{{fix_text}}"
   '';
 in
 stdenvNoCC.mkDerivation {
@@ -2287,8 +2573,10 @@ stdenvNoCC.mkDerivation {
 
     # nix, systemctl and journalctl come from the running system. git is only a
     # fallback (--suffix), since a fresh NixOS install doesn't ship it.
+    # NIXED_ERROR_RUN is how to call it when it isn't installed, for the "pipe it in" hint.
     makeWrapper ${python3.interpreter} $out/bin/nixed-error \
       --add-flags $out/share/nixed-error/nixed_error.py \
+      --set-default NIXED_ERROR_RUN 'nix run --extra-experimental-features "nix-command flakes" github:DanielTallon/nix-packages#nixed-error' \
       --suffix PATH : ${lib.makeBinPath [ git ]}
 
     runHook postInstall
