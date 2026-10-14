@@ -1854,7 +1854,8 @@ let
                 return 2
             text, source = reproduce(cfg)
             if text is None:
-                switch = ("nh os switch" if os.environ.get("NH_OS_FLAKE") or shutil.which("nh")
+                # nh needs a flake (or $NH_OS_FLAKE); a classic configuration.nix gets nixos-rebuild
+                switch = ("nh os switch" if os.environ.get("NH_OS_FLAKE") or (shutil.which("nh") and cfg.kind == "flake")
                           else "sudo nixos-rebuild switch")
                 print(c("32", "\n✓ Couldn't reproduce a failure."))
                 print(wrap("Your config evaluates, nothing that needs building has a failed log, and no "
