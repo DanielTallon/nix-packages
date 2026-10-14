@@ -909,12 +909,12 @@ let
                 "is an update you need to follow, not a bug.")
             # its `enable = true` (on the same line, or inside the block before it closes)
             lines, enable_ln = read_lines(rep.loc.origin.real), None
-            indent = len(line) - len(line.lstrip())
+            depth = len(open_at(lines, rep.loc.line, 1))  # by brackets: blocks aren't always indented
             for i in range(rep.loc.line - 1, min(len(lines), rep.loc.line + 40)):
+                if i >= rep.loc.line and len(open_at(lines, i + 1, 1)) <= depth:
+                    break
                 if re.search(r"\benable\s*=\s*true\b", lines[i]):
                     enable_ln = i + 1
-                    break
-                if i >= rep.loc.line and lines[i].strip() and len(lines[i]) - len(lines[i].lstrip()) <= indent:
                     break
             off = (f"change `enable = true;` on line {enable_ln} to `enable = false;`" if enable_ln
                    else f"set `{module}.enable = false;`")
@@ -1442,10 +1442,11 @@ let
             [rf"\b(?:services|programs)\.{name}\.enable\s*=\s*true\b", rf"\b(?:services|programs)\.{name}\s*=\s*\{{"], regex=True)
         exec_line = None
         if defined:
+            # Stay inside its `{ … }`, by brackets rather than indentation (blocks aren't always indented).
             lines = read_lines(defined.origin.real)
-            indent = len(lines[defined.line - 1]) - len(lines[defined.line - 1].lstrip())
-            for i in range(defined.line - 1, min(len(lines), defined.line + 40)):
-                if i >= defined.line and lines[i].strip() and len(lines[i]) - len(lines[i].lstrip()) <= indent:
+            depth = len(open_at(lines, defined.line, 1))
+            for i in range(defined.line - 1, min(len(lines), defined.line + 60)):
+                if i >= defined.line and len(open_at(lines, i + 1, 1)) <= depth:
                     break
                 if re.search(r"\b(?:ExecStart|script|preStart)\s*=", lines[i].split("#")[0]):
                     exec_line = i + 1
