@@ -527,11 +527,13 @@ let
         return -1
 
 
-    def scan_brackets(src: str, stop: int | None = None) -> dict | None:
+    def scan_brackets(src: str, stop: int | None = None, starts: list | None = None) -> dict | None:
         """Tiny Nix tokenizer. Returns the first bracket/string problem it finds.
 
         With `stop` (a character offset), returns {"kind": "stack", ...} listing the brackets still
         open at that point, unless a problem shows up before it.
+        With `starts` (a list), also appends the brackets open at the start of every line after the
+        first, or None for a line that starts inside a string or comment.
         """
         stack: list[tuple[str, int]] = []
         i, line, n = 0, 1, len(src)
@@ -542,6 +544,8 @@ let
             if c == "\n":
                 line += 1
                 i += 1
+                if starts is not None:
+                    starts.append(stack.copy())
             elif c == "#":
                 j = src.find("\n", i)
                 i = n if j < 0 else j
@@ -550,12 +554,16 @@ let
                 if j < 0:
                     return {"kind": "comment", "char": "/*", "line": line}
                 line += src.count("\n", i, j)
+                if starts is not None:
+                    starts.extend([None] * src.count("\n", i, j))
                 i = j + 2
             elif c == '"' or src.startswith("'''", i):
                 end = _skip_string(src, i)
                 if end < 0:
                     return {"kind": "string", "char": '"' if c == '"' else "'''", "line": line}
                 line += src.count("\n", i, end)
+                if starts is not None:
+                    starts.extend([None] * src.count("\n", i, end))
                 i = end
             elif c in OPEN:
                 stack.append((c, line))
@@ -816,6 +824,133 @@ let
             vars["explain_text"] = (f"Nix found a `;` on line {ln} where it didn't expect one. Usually a doubled `;;`, "
                                     "a `;` inside a list, or a `;` right after `let ... in <value>`.")
             vars["fix_text"] = f"Look at line {ln} and the line just above it."
+
+
+    def attr_paths(lines: list[str]) -> list[tuple[tuple[str, ...], int, bool]]:
+        """Every `name = value;` line as (full name, line, opens a block), read line by line.
+
+        `services.pipewire = {` followed by `enable = true;` gives ("services", "pipewire", "enable").
+        A `{` that isn't a plain `name = {` (a function body, `in {`) starts a fresh scope, named "@<line>".
+        Lines inside lists, ( ), strings or comments are left out.
+        """
+        starts: list = []
+        scan_brackets("\n".join(lines), starts=starts)
+        opens: dict[int, tuple[str, ...]] = {}  # line of a `name = {` → the name it opens
+        out = []
+        for i, l in enumerate(lines):
+            st = [] if i == 0 else (starts[i - 1] if i - 1 < len(starts) else None)
+            if st is None or any(o != "{" for o, _ in st):
+                continue
+            code = l.split("#")[0]
+            if not (m := ASSIGN_RE.match(code)):
+                continue
+            base = (opens.get(st[-1][1]) or (f"@{st[-1][1]}",)) if st else ()
+            path = base + tuple(re.findall(r'"[^"]*"|[^.\s]+', m[1]))
+            block = code[m.end():].strip() == "{"
+            if block:
+                opens[i + 1] = path
+            out.append((path, i + 1, block))
+        return out
+
+
+    def repeated_settings(lines: list[str]) -> list[tuple[int, int, str]]:
+        """(first line, repeat line, name) for every value set twice in one { } block, as Nix sees it:
+        two `name = {` blocks merge, but a value set twice, or a value next to a block of the same name, doesn't."""
+        seen: list[tuple[tuple[str, ...], int, bool]] = []
+        out = []
+        for p, ln, block in attr_paths(lines):
+            for q, ql, qblock in seen:
+                if p == q:
+                    clash = not (block and qblock)
+                elif len(p) < len(q):
+                    clash = q[:len(p)] == p and not block
+                else:
+                    clash = p[:len(q)] == q and not qblock
+                if clash:
+                    name = p[max((k + 1 for k, s in enumerate(p) if s.startswith("@")), default=0):]
+                    out.append((ql, ln, ".".join(name)))
+                    break
+            seen.append((p, ln, block))
+        return out
+
+
+    def setting_value(line: str) -> str:
+        code = line.split("#")[0]
+        m = ASSIGN_RE.match(code)
+        return code[m.end():].strip().rstrip(";").strip() if m else ""
+
+
+    def indent(line: str) -> int:
+        return len(line) - len(line.lstrip())
+
+
+    def misindented(lines: list[str], ln: int) -> bool:
+        """Is the line, or a { } block around it, indented no deeper than the block it sits in? Pasted snippets often are."""
+        chain = [ln] + [o for _, o in reversed(open_at(lines, ln, 1))]
+        return any(a != b and indent(lines[a - 1]) <= indent(lines[b - 1]) for a, b in zip(chain, chain[1:]))
+
+
+    def h_duplicate_attr(rep: Report, vars: dict, flake: Flake, rules, text: str) -> None:
+        """`attribute 'x' already defined at <first>`: the same setting twice in one { } block, often a pasted snippet."""
+        name = vars.get("name", "")
+        lines = read_lines(rep.loc.origin.real) if rep.loc else []
+        ln = rep.loc.line if rep.loc and rep.loc.line else 0
+        m = re.search(r"already defined at (?P<loc>«[^»]*»[^\s:]*|/[^\s:]+):(?P<line>\d+):(?P<col>\d+)", text)
+        fl = int(m["line"]) if m else 0
+        if m:
+            rep.others = [Loc(flake.origin(m["loc"]), fl, int(m["col"]))]
+        if not lines or not fl or not ln or max(fl, ln) > len(lines):
+            vars["explain_text"] = f"`{name}` is set twice in the same {{ }} block. Each name can only be set once there."
+            vars["fix_text"] = f"Delete one of the two `{name}` settings{f' (lines {fl} and {ln})' if fl and ln else '''}."
+            return
+
+        def which_to_delete(a: int, b: int) -> int:
+            """The copy that looks pasted in (indented wrong), else the later one."""
+            ma, mb = misindented(lines, a), misindented(lines, b)
+            return a if ma and not mb else b
+
+        def compare(a: int, b: int) -> str:
+            va, vb = setting_value(lines[a - 1]), setting_value(lines[b - 1])
+            if "{" in (va, vb) or not va or not vb:
+                return ""
+            return "same value" if va == vb else f"`{va}` vs `{vb}`"
+
+        w = len(str(max(fl, ln)))
+        vars["explain_text"] = (f"`{name}` is set twice in {rep.loc.origin.display}. Inside one {{ }} block each name can "
+                                f"only be set once, so Nix stops reading the file:\n"
+                                f"    {str(fl).rjust(w)} │ {lines[fl - 1].strip()}\n"
+                                f"    {str(ln).rjust(w)} │ {lines[ln - 1].strip()}")
+        notes = []
+        dele = which_to_delete(fl, ln)
+        keep = fl if dele == ln else ln
+        if misindented(lines, dele) and not misindented(lines, keep):
+            notes.append(f"Line {dele} is indented less than the code around it, like a snippet pasted in. "
+                         f"Line {keep} was there already.")
+            if dele != ln:  # show the copy to delete, not Nix's position
+                rep.others, rep.loc = [rep.loc], rep.others[0]
+        notes.append("`lib.mkForce` doesn't help here: Nix stops while reading the file, before NixOS looks at any option.")
+        vars["note"] = "\n\n".join(notes)
+
+        cmp = compare(fl, ln)
+        if cmp == "same value":
+            fix = f"Both set it to `{setting_value(lines[fl - 1])}`. Delete line {dele}:\n    {lines[dele - 1].strip()}"
+        elif cmp:
+            fix = f"They disagree ({cmp}). Keep the one you want and delete the other (line {fl} or {ln})."
+        else:
+            fix = f"Combine them into one, or delete the copy you don't need (line {dele} looks like it)."
+        # Nix stops at the first repeat; list the rest, which the next build would stop at.
+        more = [(a, b, n) for a, b, n in repeated_settings(lines) if b != ln and a != ln]
+        if more:
+            fix += (f"\n\nNix stops at the first repeat, and {rep.loc.origin.display} has "
+                    f"{'another' if len(more) == 1 else len(more)} more. Delete these too, or the next build stops there:")
+            for a, b, n in more[:8]:
+                d = which_to_delete(a, b)
+                c_ = compare(a, b)
+                fix += f"\n    line {d}: {lines[d - 1].strip()}   (`{n}`, also on line {a if d == b else b}" + (
+                    f"; {c_})" if c_ else ")")
+            if len(more) > 8:
+                fix += f"\n    … and {len(more) - 8} more"
+        vars["fix_text"] = fix
 
 
     def nixpkgs_names(flake: Flake) -> list[str]:
@@ -1511,6 +1646,7 @@ let
         "semicolon": h_semicolon, "brackets": h_brackets, "build": h_build,
         "module_arg": h_module_arg, "assertion": h_assertion, "stray_closer": h_stray_closer,
         "semicolon_inside": h_semicolon_inside,
+        "duplicate_attr": h_duplicate_attr,
         "equals_inside": h_equals_inside,
         "bare_word": h_bare_word,
         "unknown_name": h_unknown_name,
@@ -1948,6 +2084,21 @@ let
     blame = "you"
     handler = "semicolon_inside"
     explain = "{{explain_text}}"
+    fix = "{{fix_text}}"
+
+    [[rule]]
+    id = "duplicate-attribute"
+    title = "Same setting written twice"
+    # Nix's own position is the repeat; the handler reads the first one from "already defined at <file>:<line>:<col>"
+    match = ''''attribute '(?P<name>[^']+)' already defined at''''
+    priority = 85
+    blame = "you"
+    handler = "duplicate_attr"
+    explain = """
+    {{explain_text}}
+
+    {{note}}
+    """
     fix = "{{fix_text}}"
 
     [[rule]]
