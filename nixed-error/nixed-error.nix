@@ -931,26 +931,62 @@ let
         notes.append("`lib.mkForce` doesn't help here: Nix stops while reading the file, before NixOS looks at any option.")
         vars["note"] = "\n\n".join(notes)
 
+        # Every repeat in the file (Nix stops at the first), as (line to delete, the other line, name, comparison).
+        repeats = [(which_to_delete(a, b), a, b, n, compare(a, b)) for a, b, n in repeated_settings(lines)]
+        repeats = [(d, a if d == b else b, n, c_) for d, a, b, n, c_ in repeats]
+        # A { } block whose settings all repeat others with the same value can go as a whole: a pasted copy.
+        safe = {d for d, _, _, c_ in repeats if c_ == "same value"}
+        paths = attr_paths(lines)
+        whole: list[tuple[int, int]] = []
+        for _, bl, is_block in paths:
+            if not is_block or any(s < bl <= e for s, e in whole):
+                continue
+            end = block_end(lines, bl)
+            leaves = [l for _, l, blk in paths if bl < l < end and not blk]
+            if leaves and all(l in safe for l in leaves):
+                whole.append((bl, end))
+
+        def in_whole(line: int) -> tuple[int, int] | None:
+            return next(((s, e) for s, e in whole if s <= line <= e), None)
+
         cmp = compare(fl, ln)
-        if cmp == "same value":
+        if (blk := in_whole(dele)) and cmp == "same value":
+            s, e = blk
+            fix = (f"Delete lines {s}–{e}, the whole `{lines[s - 1].strip()}` block: every setting in it is "
+                   f"already set the same way elsewhere.")
+        elif cmp == "same value":
             fix = f"Both set it to `{setting_value(lines[fl - 1])}`. Delete line {dele}:\n    {lines[dele - 1].strip()}"
         elif cmp:
             fix = f"They disagree ({cmp}). Keep the one you want and delete the other (line {fl} or {ln})."
         else:
             fix = f"Combine them into one, or delete the copy you don't need (line {dele} looks like it)."
-        # Nix stops at the first repeat; list the rest, which the next build would stop at.
-        more = [(a, b, n) for a, b, n in repeated_settings(lines) if b != ln and a != ln]
-        if more:
-            fix += (f"\n\nNix stops at the first repeat, and {rep.loc.origin.display} has "
-                    f"{'another' if len(more) == 1 else len(more)} more. Delete these too, or the next build stops there:")
-            for a, b, n in more[:8]:
-                d = which_to_delete(a, b)
-                c_ = compare(a, b)
-                fix += f"\n    line {d}: {lines[d - 1].strip()}   (`{n}`, also on line {a if d == b else b}" + (
-                    f"; {c_})" if c_ else ")")
-            if len(more) > 8:
-                fix += f"\n    … and {len(more) - 8} more"
+        # The rest, which the next build would stop at, in file order; a whole repeated block is one item.
+        items: dict[int, str] = {}
+        for d, other, n, c_ in repeats:
+            if d in (fl, ln) or (blk := in_whole(dele)) and blk[0] <= d <= blk[1]:
+                continue
+            if blk := in_whole(d):
+                items[blk[0]] = (f"lines {blk[0]}–{blk[1]}: the whole `{lines[blk[0] - 1].strip()}` block "
+                                 f"(every setting in it is already set the same way elsewhere)")
+            else:
+                items[d] = f"line {d}: {lines[d - 1].strip()}   (`{n}`, also on line {other}" + (
+                    "; same value)" if c_ == "same value" else f"; {c_}: keep the one you want)" if c_ else ")")
+        if items:
+            fix += (f"\n\nNix stops at the first repeat, and {rep.loc.origin.display} has more. "
+                    f"Delete these too, or the next build stops there:")
+            for k in sorted(items)[:8]:
+                fix += f"\n    {items[k]}"
+            if len(items) > 8:
+                fix += f"\n    … and {len(items) - 8} more"
         vars["fix_text"] = fix
+
+
+    def block_end(lines: list[str], start: int) -> int:
+        """Line of the `}` closing the `{` that line `start` opens."""
+        for j in range(start + 1, len(lines) + 1):
+            if ("{", start) not in open_at(lines, j, len(lines[j - 1]) + 1):
+                return j
+        return len(lines)
 
 
     def nixpkgs_names(flake: Flake) -> list[str]:
