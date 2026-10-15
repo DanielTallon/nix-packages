@@ -1456,6 +1456,40 @@ let
         return ""
 
 
+    def enum_values(desc: str) -> list[str]:
+        """The allowed values of `one of "a", "b", 3`, as Nix prints them (strings keep their quotes)."""
+        rest = re.sub(r"^(?:null or )*one of ", "", desc)
+        return re.findall(r'"(?:[^"\\]|\\.)*"|[^,\s]+', rest)
+
+
+    def edit_distance(a: str, b: str) -> int:
+        """Levenshtein distance, counting a swap of two neighbouring letters as one edit."""
+        prev2, prev = [], list(range(len(b) + 1))
+        for i in range(1, len(a) + 1):
+            cur = [i] + [0] * len(b)
+            for j in range(1, len(b) + 1):
+                cur[j] = min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] != b[j - 1]))
+                if i > 1 and j > 1 and a[i - 1] == b[j - 2] and a[i - 2] == b[j - 1]:
+                    cur[j] = min(cur[j], prev2[j - 2] + 1)
+            prev2, prev = prev, cur
+        return prev[-1]
+
+
+    def closest_value(given: str, allowed: list[str]) -> str | None:
+        """The allowed value `given` was most likely meant to be: same letters in another case first,
+        then one or two typos away (one for short words), if exactly one value is that close."""
+        bare = lambda v: v[1:-1] if len(v) > 1 and v[0] == v[-1] == '"' else v
+        g = bare(given).lower()
+        same = [a for a in allowed if bare(a).lower() == g]
+        if len(same) == 1:
+            return same[0]
+        near = [(edit_distance(g, bare(a).lower()), a) for a in allowed]
+        best = min((d for d, _ in near), default=99)
+        limit = 1 if len(g) <= 4 else 2
+        hits = [a for d, a in near if d == best]
+        return hits[0] if best <= limit and len(hits) == 1 else None
+
+
     def h_option_type(rep: Report, vars: dict, flake: Flake, rules, text: str) -> None:
         """Say what the option wants, what it got, and the corrected line when that's clear."""
         option, desc = vars.get("option", ""), vars.get("type", "")
@@ -1502,7 +1536,19 @@ let
             advice = "Use the package itself (`pkgs.name`), not its name in quotes."
             new = f"pkgs.{unquoted}" if unquoted and re.fullmatch(r"[\w.-]+", unquoted) else None
         elif want == "enum":
-            advice = f"Use one of the allowed values: {re.sub(r'^(?:null or )*one of ', ''', desc)}."
+            allowed = enum_values(desc)
+            listed = ", ".join(allowed)
+            # A value of the right kind that just isn't in the list: say that, not "wrong kind".
+            if got and got == value_kind(allowed[0] if allowed else ""):
+                short = one_line if one_line and len(one_line) < 40 else "This value"
+                rep.title = f"{short} isn't an allowed value for this option"
+                vars["explain_text"] = f"`{option}` only accepts {listed}{f', and `{one_line}` is not one of them' if shown else '''}."
+            if one_line and (guess := closest_value(one_line, allowed)):
+                advice = f"Did you mean {guess}? (allowed: {listed})"
+                if val is not None and val.strip() == one_line:
+                    new = guess
+            else:
+                advice = f"Use one of the allowed values: {listed}."
         elif want == "attribute set" and got == "list":
             advice = "Use `{ name = value; }`, not a list `[ ]`."
         elif want == "path" and got == "string" and unquoted and not unquoted.startswith("/"):
