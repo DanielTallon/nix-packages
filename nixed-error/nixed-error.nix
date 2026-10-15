@@ -966,8 +966,8 @@ let
             if d in (fl, ln) or (blk := in_whole(dele)) and blk[0] <= d <= blk[1]:
                 continue
             if blk := in_whole(d):
-                items[blk[0]] = (f"lines {blk[0]}–{blk[1]}: the whole `{lines[blk[0] - 1].strip()}` block "
-                                 f"(every setting in it is already set the same way elsewhere)")
+                # indented lines aren't wrapped, so keep this short and explain "all repeats" below the list
+                items[blk[0]] = f"lines {blk[0]}–{blk[1]}: `{lines[blk[0] - 1].strip()} … }};`   (all repeats)"
             else:
                 items[d] = f"line {d}: {lines[d - 1].strip()}   (`{n}`, also on line {other}" + (
                     "; same value)" if c_ == "same value" else f"; {c_}: keep the one you want)" if c_ else ")")
@@ -978,6 +978,8 @@ let
                 fix += f"\n    {items[k]}"
             if len(items) > 8:
                 fix += f"\n    … and {len(items) - 8} more"
+            if any("(all repeats)" in t for t in items.values()):
+                fix += "\n\n\"All repeats\": every setting in that block is already set the same way elsewhere, so the whole block can go."
         vars["fix_text"] = fix
 
 
@@ -1525,6 +1527,39 @@ let
     # and as `journalctl -o short-unix` prints it: `1760409063.123456 nixos bash[6797]: something broke`
     UNIX_JOURNAL_RE = re.compile(r"^(?P<ts>\d+\.\d+) \S+ (?P<ident>[^\s\[:]+)(?:\[\d+\])?: (?P<msg>.*)$", re.M)
     UNIT_KINDS = {"service": "services", "timer": "timers", "socket": "sockets", "path": "paths"}
+    # the new NVIDIA tools can't talk to the old kernel module, which stays loaded until a reboot
+    DRIVER_MISMATCH_RE = re.compile(r"Driver/library version mismatch|NVRM: API mismatch")
+    NVML_VERSION_RE = re.compile(r"NVML library version: (?P<v>[\d.]+)")
+
+
+    def loaded_nvidia_version() -> str:
+        try:
+            m = re.search(r"Kernel Module\s+(?P<v>[\d.]+)", Path("/proc/driver/nvidia/version").read_text())
+            return m["v"] if m else ""
+        except OSError:
+            return ""
+
+
+    def driver_mismatch(unit: str, others: list[str], flake: Flake, log: str) -> tuple[str, str]:
+        """(explain, fix) for a GPU service that failed because a switch changed the driver without a reboot."""
+        old, new = loaded_nvidia_version(), (m["v"] if (m := NVML_VERSION_RE.search(log)) else "")
+        explain = "Your GPU driver changed during the last update, and you need to reboot to use it."
+        if old and new and old != new:
+            explain += f" The running kernel still has the old NVIDIA driver ({old}) loaded, but the new tools are {new}."
+        else:
+            explain += " The running kernel still has the old NVIDIA driver loaded, and the new tools won't talk to it."
+        explain += (f"\n\n`{unit}` failed because of that, not because of anything in its definition. A switch can't "
+                    "swap a driver that's in use, so every service that talks to the GPU fails until you reboot")
+        explain += f" (here also {', '.join(f'`{o}`' for o in others)})." if others else "."
+        if flake.dir and (flake.dir / "flake.nix").exists():
+            plain = f"    sudo nixos-rebuild boot --flake {flake.dir}\n    reboot"
+        else:
+            plain = "    sudo nixos-rebuild boot\n    reboot"
+        fix = ("Make the update your next boot, then reboot:\n    nh os boot\n    reboot\n\n"
+               f"Or without nh:\n{plain}\n\n"
+               "`boot` doesn't touch the running system, so nothing fails on the way. Your config and the "
+               "service are fine: don't remove it.")
+        return explain, fix
 
 
     def unit_journal(unit: str, user: bool, text: str) -> list[tuple[float | None, str, str]]:
@@ -1664,6 +1699,13 @@ let
             vars["explain_text"] += f"\n\nAlso failed: {', '.join(f'`{o}`' for o in others)}."
 
         jflag = "--user-unit" if user else "-u"
+        if DRIVER_MISMATCH_RE.search("\n".join(ownlines) + "\n" + text):
+            rep.blame = "system"
+            rep.loc = flake.find([r'\bvideoDrivers\s*=.*"nvidia"', r"\bhardware\.nvidia\b"], regex=True) or rep.loc
+            vars["explain_text"], fix = driver_mismatch(unit, others, flake, "\n".join(ownlines) + "\n" + text)
+            vars["fix_text"] = f"{fix}\n\nFull log:\n    journalctl -b {jflag} {unit}"
+            return
+
         fix = []
         if leftover:
             fix.append(f"Clear the old failure:\n    sudo systemctl reset-failed {unit}")
@@ -1848,7 +1890,7 @@ let
     BLAME = {
         "you": ("36", "Your config", "something in your own files"),
         "upstream": ("35", "Upstream", "not something you typed"),
-        "system": ("33", "Your machine", "disk, network or permissions, not your config"),
+        "system": ("33", "Your machine", "disk, network, drivers or permissions, not your config"),
         "unknown": ("2", "Unclear", "couldn't tell whose it is"),
     }
 
