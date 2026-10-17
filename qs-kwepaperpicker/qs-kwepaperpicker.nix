@@ -54,11 +54,20 @@ stdenvNoCC.mkDerivation (finalAttrs: {
                      'Quickshell.env("KWEPAPERPICKER_STATE") + "/colors/Colors.json"'
 
     # The launcher: run the store copy, and make sure the state dir exists.
+    # Quickshell finds a running instance by its config path, and the store
+    # path changes with every update, so the picker is run through a symlink
+    # that `start` points at this build: `toggle` from a newer build still
+    # reaches the instance started by an older one.
     substituteInPlace bin/kwepaperpicker \
       --replace-fail 'cfg="''${XDG_CONFIG_HOME:-$HOME/.config}/kwepaperpicker"' \
                      'cfg="@out@/share/kwepaperpicker"
 export KWEPAPERPICKER_STATE="''${XDG_CONFIG_HOME:-$HOME/.config}/kwepaperpicker"
-mkdir -p "$KWEPAPERPICKER_STATE/colors"' \
+mkdir -p "$KWEPAPERPICKER_STATE/colors"
+link="''${XDG_STATE_HOME:-$HOME/.local/state}/kwepaperpicker/shell"' \
+      --replace-fail 'start)     exec qs -p "$cfg" --no-duplicate ;;' \
+                     'start)     mkdir -p "''${link%/*}"; ln -sfn "$cfg" "$link"
+               exec qs -p "$link" --no-duplicate ;;' \
+      --replace-fail 'qs -p "$cfg"' 'qs -p "$link"' \
       --replace-fail '(run its install.sh)' '(broken package)'
   '';
 
