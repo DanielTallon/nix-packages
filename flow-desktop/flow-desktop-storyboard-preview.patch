@@ -1,0 +1,342 @@
+diff --git a/src-tauri/src/api/innertube/extractors/player.rs b/src-tauri/src/api/innertube/extractors/player.rs
+index 08b0ffc..e8160d5 100644
+--- a/src-tauri/src/api/innertube/extractors/player.rs
++++ b/src-tauri/src/api/innertube/extractors/player.rs
+@@ -1920,6 +1920,9 @@ impl InnertubeClient {
+             published_text,
+             chapters,
+             is_live: res["videoDetails"]["isLive"].as_bool().unwrap_or(false),
++            storyboard_spec: res["storyboards"]["playerStoryboardSpecRenderer"]["spec"]
++                .as_str()
++                .map(ToOwned::to_owned),
+         })
+     }
+ 
+diff --git a/src-tauri/src/models/video.rs b/src-tauri/src/models/video.rs
+index e0ec037..661af9a 100644
+--- a/src-tauri/src/models/video.rs
++++ b/src-tauri/src/models/video.rs
+@@ -68,6 +68,10 @@ pub struct VideoDetails {
+     pub chapters: Vec<VideoChapter>,
+     #[serde(default)]
+     pub is_live: bool,
++    // Raw `playerStoryboardSpecRenderer.spec`; the frontend turns it into
++    // seekbar hover thumbnails (`src/lib/storyboard.ts`).
++    #[serde(default)]
++    pub storyboard_spec: Option<String>,
+ }
+ 
+ #[derive(Debug, Clone, Serialize, Deserialize)]
+diff --git a/src/components/player/FlowPlayerControls.tsx b/src/components/player/FlowPlayerControls.tsx
+index cecd0be..921cd39 100644
+--- a/src/components/player/FlowPlayerControls.tsx
++++ b/src/components/player/FlowPlayerControls.tsx
+@@ -28,6 +28,7 @@ import { useSettingsStore, type SponsorBlockCategory } from "../../store/useSett
+ import type { AudioTrack, CaptionTrack, StreamVariant, VideoChapter } from "../../types/video";
+ import { SubtitleCustomizer } from "./SubtitleCustomizer";
+ import { SponsorBlockSubmitDialog } from "./SponsorBlockSubmitDialog";
++import { parseStoryboardSpec, storyboardFrameAt } from "../../lib/storyboard";
+ import { SponsorBlockIcon } from "../ui/SponsorBlockIcon";
+ import { sponsorBlockCategoryLabel } from "../../lib/sponsorBlockCategories";
+ import { getString } from "../../lib/i18n/index";
+@@ -88,6 +89,7 @@ export interface FlowPlayerControlsProps {
+   setIsScrubbing: React.Dispatch<React.SetStateAction<boolean>>;
+ 
+   chapters?: VideoChapter[];
++  storyboardSpec?: string | null;
+   activeQualityLabel?: string;
+ }
+ 
+@@ -164,6 +166,7 @@ export const FlowPlayerControls: React.FC<FlowPlayerControlsProps> = ({
+   isScrubbing,
+   setIsScrubbing,
+   chapters = [],
++  storyboardSpec = null,
+   activeQualityLabel,
+ }) => {
+   const {
+@@ -200,6 +203,8 @@ export const FlowPlayerControls: React.FC<FlowPlayerControlsProps> = ({
+   const hoverSegmentRef = useRef<HTMLSpanElement>(null);
+   const hoverSegmentDotRef = useRef<HTMLSpanElement>(null);
+   const hoverSegmentLabelRef = useRef<HTMLSpanElement>(null);
++  const hoverThumbRef = useRef<HTMLDivElement>(null);
++  const storyboard = React.useMemo(() => parseStoryboardSpec(storyboardSpec), [storyboardSpec]);
+ 
+   const segments = React.useMemo(() => {
+     if (isLive || !chapters || chapters.length === 0) {
+@@ -344,9 +349,28 @@ export const FlowPlayerControls: React.FC<FlowPlayerControlsProps> = ({
+     if (rect.width <= 0) return;
+     // Clamp so the pill keeps tracking at the track edges during a drag.
+     const x = Math.min(rect.width, Math.max(0, clientX - rect.left));
+-    pill.style.left = `${x}px`;
+-    pill.style.opacity = "1";
+     const time = (x / rect.width) * duration;
++    const frame = storyboard ? storyboardFrameAt(storyboard, time, duration) : null;
++    const thumb = hoverThumbRef.current;
++    if (thumb) {
++      if (frame) {
++        thumb.style.display = "block";
++        thumb.style.width = `${frame.width}px`;
++        thumb.style.height = `${frame.height}px`;
++        thumb.style.backgroundImage = `url("${frame.url}")`;
++        thumb.style.backgroundPosition = `-${frame.x}px -${frame.y}px`;
++      } else {
++        thumb.style.display = "none";
++      }
++    }
++    // Keep a thumbnail-wide pill inside the track at the edges.
++    const halfWidth = frame ? frame.width / 2 + 2 : 0;
++    const pillX =
++      halfWidth > 0 && rect.width > halfWidth * 2
++        ? Math.min(rect.width - halfWidth, Math.max(halfWidth, x))
++        : x;
++    pill.style.left = `${pillX}px`;
++    pill.style.opacity = "1";
+     if (hoverTextRef.current) {
+       const chapter = segments?.find((c) => time >= c.startSeconds && time <= c.endSeconds);
+       hoverTextRef.current.textContent = chapter?.title
+@@ -580,9 +604,13 @@ export const FlowPlayerControls: React.FC<FlowPlayerControlsProps> = ({
+             {!isLive && (
+               <div
+                 ref={hoverPillRef}
+-                className="absolute bottom-8 -translate-x-1/2 flex flex-col items-center pointer-events-none z-50 opacity-0 transition-opacity duration-75"
++                className="absolute bottom-8 -translate-x-1/2 flex flex-col items-center gap-1.5 pointer-events-none z-50 opacity-0 transition-opacity duration-75"
+                 style={{ left: 0 }}
+               >
++                <div
++                  ref={hoverThumbRef}
++                  className="hidden overflow-hidden rounded-xl border border-chrome-white/10 bg-chrome-black bg-no-repeat"
++                />
+                 <div className="bg-chrome-black/80 border border-chrome-white/10 px-2 py-1 rounded-2xl text-chrome-white min-w-max text-center flex flex-col items-center gap-0.5 leading-tight">
+                   <span ref={hoverTextRef} className="text-[12px] font-medium font-sans" />
+                   <span
+diff --git a/src/components/player/Player.tsx b/src/components/player/Player.tsx
+index 79331a4..5adb0fc 100644
+--- a/src/components/player/Player.tsx
++++ b/src/components/player/Player.tsx
+@@ -76,6 +76,7 @@ type PlayerProps = {
+   sourceMode?: string;
+   className?: string;
+   chapters?: VideoChapter[];
++  storyboardSpec?: string | null;
+ };
+ 
+ type DashBitrateInfo = {
+@@ -328,6 +329,7 @@ export const Player: React.FC<PlayerProps> = ({
+   sourceMode,
+   className,
+   chapters = [],
++  storyboardSpec = null,
+ }) => {
+   const [activeQualityLabel, setActiveQualityLabel] = useState<string | null>(null);
+   const videoRef = useRef<HTMLVideoElement>(null);
+@@ -2778,6 +2780,7 @@ export const Player: React.FC<PlayerProps> = ({
+         isScrubbing={isScrubbing}
+         setIsScrubbing={setIsScrubbing}
+         chapters={chapters}
++        storyboardSpec={storyboardSpec}
+         activeQualityLabel={isDashPlayback ? (activeQualityLabel || undefined) : (qualities.find(q => q.localUrl === src)?.qualityLabel || undefined)}
+       />
+       )}
+diff --git a/src/components/watch/FlowPlayerCore.tsx b/src/components/watch/FlowPlayerCore.tsx
+index f5a08de..3e0f449 100644
+--- a/src/components/watch/FlowPlayerCore.tsx
++++ b/src/components/watch/FlowPlayerCore.tsx
+@@ -265,6 +265,7 @@ export function FlowPlayerCore({ videoId, videoDetails, onEnded }: FlowPlayerCor
+       resumeTime={stream.resumeTime}
+       sourceMode={stream.sourceMode}
+       chapters={videoDetails?.chapters}
++      storyboardSpec={videoDetails?.storyboardSpec}
+       onRetrySource={stream.onRetrySource}
+       onSelectQuality={stream.onSelectQuality}
+       onTimeUpdate={handleTimeUpdate}
+diff --git a/src/lib/storyboard.test.ts b/src/lib/storyboard.test.ts
+new file mode 100644
+index 0000000..6cd1d4d
+--- /dev/null
++++ b/src/lib/storyboard.test.ts
+@@ -0,0 +1,60 @@
++import { describe, expect, it } from "vitest";
++import { parseStoryboardSpec, storyboardFrameAt } from "./storyboard";
++
++const SPEC =
++  "https://i.ytimg.com/sb/abcdefghijk/storyboard3_L$L/$N.jpg?sqp=xyz" +
++  "|48#27#100#10#10#0#default#rs$AAA" +
++  "|80#45#108#10#10#2000#M$M#rs$BBB" +
++  "|160#90#108#5#5#2000#M$M#rs$CCC";
++
++describe("parseStoryboardSpec", () => {
++  it("keeps the sharpest level", () => {
++    const storyboard = parseStoryboardSpec(SPEC);
++    expect(storyboard?.level).toMatchObject({
++      level: 2,
++      width: 160,
++      height: 90,
++      columns: 5,
++      rows: 5,
++      intervalMs: 2000,
++      sigh: "rs$CCC",
++    });
++  });
++
++  it("rejects missing or malformed specs", () => {
++    expect(parseStoryboardSpec(null)).toBeNull();
++    expect(parseStoryboardSpec("")).toBeNull();
++    expect(parseStoryboardSpec("not a url|1#2")).toBeNull();
++  });
++});
++
++describe("storyboardFrameAt", () => {
++  const storyboard = parseStoryboardSpec(SPEC)!;
++
++  it("finds the sheet and cell for a time", () => {
++    // 61s / 2s = frame 30 → sheet 1 (25 per sheet), cell 5 → column 0, row 1.
++    const frame = storyboardFrameAt(storyboard, 61, 216);
++    expect(frame).toEqual({
++      url: "https://i.ytimg.com/sb/abcdefghijk/storyboard3_L2/M1.jpg?sqp=xyz&sigh=rs%24CCC",
++      width: 160,
++      height: 90,
++      x: 0,
++      y: 90,
++    });
++  });
++
++  it("clamps to the last frame", () => {
++    const frame = storyboardFrameAt(storyboard, 10_000, 216);
++    // Frame 107 → sheet 4, cell 7 → column 2, row 1.
++    expect(frame).toMatchObject({ x: 320, y: 90 });
++    expect(frame?.url).toContain("/M4.jpg");
++  });
++
++  it("spreads frames over the duration when no interval is given", () => {
++    const single = parseStoryboardSpec(
++      "https://i.ytimg.com/sb/abcdefghijk/storyboard3_L$L/$N.jpg?sqp=xyz|48#27#100#10#10#0#M$M#rs$AAA",
++    )!;
++    // 100 frames over 200s → 2s each; 50s → frame 25 → column 5, row 2.
++    expect(storyboardFrameAt(single, 50, 200)).toMatchObject({ x: 240, y: 54 });
++  });
++});
+diff --git a/src/lib/storyboard.ts b/src/lib/storyboard.ts
+new file mode 100644
+index 0000000..4dae427
+--- /dev/null
++++ b/src/lib/storyboard.ts
+@@ -0,0 +1,106 @@
++/**
++ * Seekbar hover thumbnails from YouTube's storyboard sprite sheets.
++ *
++ * The player response carries `storyboards.playerStoryboardSpecRenderer.spec`:
++ * a `|`-separated string whose first field is a URL template and each further
++ * field one level, `width#height#count#columns#rows#intervalMs#name#sigh`.
++ * Level `n` is addressed as `$L` = n; `$N` is the level's name, in which `$M`
++ * is the sprite sheet index.
++ */
++
++export type StoryboardLevel = {
++  level: number;
++  width: number;
++  height: number;
++  count: number;
++  columns: number;
++  rows: number;
++  intervalMs: number;
++  name: string;
++  sigh: string;
++};
++
++export type Storyboard = {
++  baseUrl: string;
++  level: StoryboardLevel;
++};
++
++export type StoryboardFrame = {
++  url: string;
++  width: number;
++  height: number;
++  /** Offset of the frame inside its sprite sheet, in pixels. */
++  x: number;
++  y: number;
++};
++
++/** Parse a spec and keep its sharpest level. Returns null when unusable. */
++export function parseStoryboardSpec(spec: string | null | undefined): Storyboard | null {
++  if (!spec) return null;
++  const [baseUrl, ...rawLevels] = spec.split("|");
++  if (!baseUrl?.startsWith("https://")) return null;
++
++  let best: StoryboardLevel | null = null;
++  for (const [level, raw] of rawLevels.entries()) {
++    const fields = raw.split("#");
++    if (fields.length < 8) continue;
++    const [width = 0, height = 0, count = 0, columns = 0, rows = 0, intervalMs = 0] = fields
++      .slice(0, 6)
++      .map(Number);
++    const name = fields[6] ?? "";
++    const sigh = fields.slice(7).join("#");
++    if (![width, height, count, columns, rows].every((n) => Number.isFinite(n) && n > 0)) continue;
++    // Sheets without a `$M` page slot are single-image previews too coarse to scrub with.
++    if (!name.includes("$M") && rawLevels.length > 1) continue;
++    if (!best || width * height > best.width * best.height) {
++      best = {
++        level,
++        width,
++        height,
++        count,
++        columns,
++        rows,
++        intervalMs: Number.isFinite(intervalMs) ? intervalMs : 0,
++        name,
++        sigh,
++      };
++    }
++  }
++
++  return best ? { baseUrl, level: best } : null;
++}
++
++/** The sprite sheet and offset showing `timeSeconds` of a `durationSeconds` video. */
++export function storyboardFrameAt(
++  storyboard: Storyboard,
++  timeSeconds: number,
++  durationSeconds: number,
++): StoryboardFrame | null {
++  const { level } = storyboard;
++  const intervalMs =
++    level.intervalMs > 0 ? level.intervalMs : (durationSeconds * 1000) / level.count;
++  if (!(intervalMs > 0)) return null;
++
++  const index = Math.min(
++    level.count - 1,
++    Math.max(0, Math.floor((timeSeconds * 1000) / intervalMs)),
++  );
++  const perSheet = level.columns * level.rows;
++  const sheet = Math.floor(index / perSheet);
++  const cell = index % perSheet;
++
++  const url = new URL(
++    storyboard.baseUrl
++      .replace("$L", String(level.level))
++      .replace("$N", level.name.replace("$M", String(sheet))),
++  );
++  if (level.sigh) url.searchParams.set("sigh", level.sigh);
++
++  return {
++    url: url.toString(),
++    width: level.width,
++    height: level.height,
++    x: (cell % level.columns) * level.width,
++    y: Math.floor(cell / level.columns) * level.height,
++  };
++}
+diff --git a/src/types/video.ts b/src/types/video.ts
+index a3ee428..a80399c 100644
+--- a/src/types/video.ts
++++ b/src/types/video.ts
+@@ -49,6 +49,7 @@ export interface VideoDetails {
+   publishedText?: string | null;
+   chapters?: VideoChapter[];
+   isLive?: boolean | null;
++  storyboardSpec?: string | null;
+ }
+ 
+ export interface StreamInfo {
