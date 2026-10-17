@@ -8,7 +8,7 @@ use and shared here in case they're useful to anyone else:
 - **[`boot-gardener`](https://github.com/DanielTallon/nix-packages/blob/main/boot-gardener)** — Boot Gardener, a bash (`jq` + `fzf`) tool for NixOS to pick, pin, prune, harvest, or garbage-collect boot-menu generations on Limine, systemd-boot, or GRUB, plus a rescue mode for a full `/boot` partition. Own project, MIT licensed.
 - **[`proton-wineland`](./proton-wineland)** — [Proton Wineland](https://github.com/nanomatters/proton-cachyos), a Wayland-focused Proton fork, packaged as a Steam compatibility tool. Restores DLSS, frame generation and ray/path tracing in *The Witcher 3* 5.x with no exe patching. x86_64-linux only. See [proton-wineland](#proton-wineland) below.
 - **[`nixed-error`](./nixed-error)** — explains a failed NixOS rebuild in plain words: what went wrong, the file and line, whether it's your config, upstream, or your machine, and how to fix it. Rule-based (no LLM, no network). Own project, still in testing.
-- **[`qs-kwepaperpicker`](./qs-kwepaperpicker)** — [kwepaperpicker](https://gitlab.com/theblackdon/qs-kwepaperpicker), a swatch-deck wallpaper picker for Quickshell. Run `kwepaperpicker` to start it and `kwepaperpicker toggle` to open it. Its settings and colour scheme are kept in `~/.config/kwepaperpicker`. Needs the Material Symbols Rounded font (`fonts.packages = [ pkgs.material-symbols ];`). GPL-3.0-or-later.
+- **[`qs-kwepaperpicker`](./qs-kwepaperpicker)** — [kwepaperpicker](https://gitlab.com/theblackdon/qs-kwepaperpicker), a swatch-deck wallpaper picker for Quickshell. Brings its own icon font, and on KDE Plasma hands the chosen wallpaper to Plasma by default. `qs-kwepaperpicker-nixgl` is the same picker for Nix on other distros. See [qs-kwepaperpicker](#qs-kwepaperpicker) below. GPL-3.0-or-later.
 - **[`flow-desktop`](./flow-desktop)** — [Flow Desktop](https://github.com/Flow-Tube/Flow-Desktop), a privacy-respecting YouTube and YouTube Music client (Tauri 2), built from source. Based on [olafkfreund/nixos-FlowTube](https://github.com/olafkfreund/nixos-FlowTube)'s package, tracking upstream main, plus a local patch that adds thumbnail previews to the seekbar. GPL-3.0.
 
 Each package is exposed on its own — installing or building one never pulls in the others.
@@ -21,6 +21,8 @@ nix run github:DanielTallon/nix-packages#lgl-papercutter
 nix run github:DanielTallon/nix-packages#kenku-fm
 nix run github:DanielTallon/nix-packages#boot-gardener
 nix run github:DanielTallon/nix-packages#nixed-error
+nix run github:DanielTallon/nix-packages#qs-kwepaperpicker
+nix run github:DanielTallon/nix-packages#flow-desktop
 ```
 **Run without installing, and without flakes enabled:**
 ```sh
@@ -28,6 +30,8 @@ nix run --extra-experimental-features "nix-command flakes" github:DanielTallon/n
 nix run --extra-experimental-features "nix-command flakes" github:DanielTallon/nix-packages#kenku-fm
 nix run --extra-experimental-features "nix-command flakes" github:DanielTallon/nix-packages#boot-gardener
 nix run --extra-experimental-features "nix-command flakes" github:DanielTallon/nix-packages#nixed-error
+nix run --extra-experimental-features "nix-command flakes" github:DanielTallon/nix-packages#qs-kwepaperpicker
+nix run --extra-experimental-features "nix-command flakes" github:DanielTallon/nix-packages#flow-desktop
 ```
 
 `nixed-error` with no arguments re-evaluates your system config and explains what fails.
@@ -40,6 +44,8 @@ nix profile install github:DanielTallon/nix-packages#lgl-papercutter
 nix profile install github:DanielTallon/nix-packages#kenku-fm
 nix profile install github:DanielTallon/nix-packages#boot-gardener
 nix profile install github:DanielTallon/nix-packages#nixed-error
+nix profile install github:DanielTallon/nix-packages#qs-kwepaperpicker
+nix profile install github:DanielTallon/nix-packages#flow-desktop
 ```
 
 (`proton-wineland` is a Steam compatibility tool, not a program you run or install
@@ -59,7 +65,8 @@ inputs.nix-packages.url = "github:DanielTallon/nix-packages";
 
 nixpkgs.overlays = [ inputs.nix-packages.overlays.default ];
 # now available anywhere in your config as pkgs.lgl-papercutter / pkgs.kenku-fm /
-# pkgs.boot-gardener / pkgs.proton-wineland / pkgs.nixed-error
+# pkgs.boot-gardener / pkgs.proton-wineland / pkgs.nixed-error /
+# pkgs.qs-kwepaperpicker / pkgs.flow-desktop
 ```
 
 ## A note on `kenku-fm`
@@ -68,6 +75,38 @@ Kenku FM is not my program and is proprietary software.
 This flake scopes nixpkgs' `allowUnfreePredicate` to just this one package (see `flake.nix`), so
 building or installing it works out of the box — no `NIXPKGS_ALLOW_UNFREE`
 or `--impure` needed.
+
+## qs-kwepaperpicker
+
+Start the picker, then open and close it from a key binding or a second terminal:
+
+```sh
+nix run github:DanielTallon/nix-packages#qs-kwepaperpicker
+nix run github:DanielTallon/nix-packages#qs-kwepaperpicker -- toggle
+```
+
+(Installed, those are `kwepaperpicker` and `kwepaperpicker toggle`. `kwepaperpicker --help` lists the rest.)
+
+- **Desktop:** needs a Wayland desktop Quickshell runs on, such as KDE Plasma, Hyprland, Sway or niri. GNOME doesn't work.
+- **Font:** the Material Symbols icon font comes with the package. Nothing to install.
+- **Wallpaper:** on KDE Plasma it hands the chosen wallpaper to Plasma (`plasma-apply-wallpaperimage {}`). Elsewhere it draws the wallpaper itself, videos included. Plasma's command only takes images, so to use video wallpapers on Plasma, clear the command in the picker's settings (the gear at the top right).
+- **Files:** settings and the matugen colour scheme are kept in `~/.config/kwepaperpicker`. Wallpapers are read from `~/Pictures/wallpapers` by default.
+
+### Other distros with Nix
+
+Programs from Nix often can't find the graphics drivers on other distros. For Mesa drivers (Intel, AMD, nouveau), use the build that runs through [nixGL](https://github.com/nix-community/nixGL):
+
+```sh
+nix run github:DanielTallon/nix-packages#qs-kwepaperpicker-nixgl
+```
+
+For NVIDIA's proprietary driver, nixGL has to detect the installed driver, which needs `--impure`:
+
+```sh
+nix run --impure github:nix-community/nixGL -- nix run github:DanielTallon/nix-packages#qs-kwepaperpicker
+```
+
+Don't use either of these on NixOS. They replace the system's drivers with nixGL's.
 
 ## Updating a package
 
@@ -108,6 +147,11 @@ nix-packages/
 │   └── boot-gardener.nix
 ├── nixed-error/
 │   └── nixed-error.nix
+├── qs-kwepaperpicker/
+│   └── qs-kwepaperpicker.nix
+├── flow-desktop/
+│   ├── flow-desktop.nix
+│   └── flow-desktop-storyboard-preview.patch
 └── proton-wineland/
     ├── proton-wineland.nix
     ├── sources.json

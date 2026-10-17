@@ -4,15 +4,30 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
     flake-utils.url = "github:numtide/flake-utils";
+    # OpenGL wrapper for running qs-kwepaperpicker outside NixOS
+    # (qs-kwepaperpicker-nixgl). Only its expressions are used, built with
+    # this flake's nixpkgs, so it brings in no inputs of its own.
+    nixgl = {
+      url = "github:nix-community/nixGL";
+      flake = false;
+    };
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
+  outputs = { self, nixpkgs, flake-utils, nixgl }:
     flake-utils.lib.eachDefaultSystem (system:
       let
        pkgs = import nixpkgs {
         inherit system;
         config.allowUnfreePredicate = pkg: builtins.elem (nixpkgs.lib.getName pkg) [ "kenku-fm" ];
       };
+       qs-kwepaperpicker = pkgs.callPackage ./qs-kwepaperpicker/qs-kwepaperpicker.nix { };
+       # Mesa drivers (Intel, AMD, nouveau). NVIDIA's proprietary driver needs
+       # nixGL's impure auto-detection instead; see the README.
+       nixGLIntel = (import "${nixgl}/default.nix" {
+         inherit pkgs;
+         enable32bits = false;
+         enableIntelX86Extensions = system == "x86_64-linux";
+       }).nixGLIntel;
       in
       {
         # `nix run .#lgl-papercutter` / `nix profile install .#kenku-fm`
@@ -24,7 +39,11 @@
             kenku-fm = pkgs.callPackage ./kenku-fm/kenku-fm.nix { };
             boot-gardener = pkgs.callPackage ./boot-gardener/boot-gardener.nix { };
             nixed-error = pkgs.callPackage ./nixed-error/nixed-error.nix { };
-            qs-kwepaperpicker = pkgs.callPackage ./qs-kwepaperpicker/qs-kwepaperpicker.nix { };
+            inherit qs-kwepaperpicker;
+            # The same picker, run through nixGL, for Nix on other distros.
+            qs-kwepaperpicker-nixgl = pkgs.writeShellScriptBin "kwepaperpicker" ''
+              exec ${nixGLIntel}/bin/nixGLIntel ${nixpkgs.lib.getExe qs-kwepaperpicker} "$@"
+            '';
             flow-desktop = pkgs.callPackage ./flow-desktop/flow-desktop.nix { };
         } // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
             # Steam compat tools (prebuilt upstream releases), x86_64-linux only.
