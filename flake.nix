@@ -1,5 +1,5 @@
 {
-    description = "Standalone Nix packages: lgl-papercutter, kenku-fm, boot-gardener, proton-wineland, nixed-error";
+    description = "Standalone Nix packages: lgl-papercutter, kenku-fm, boot-gardener, proton-wineland, nixed-error, qs-kwepaperpicker, flow-desktop";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
@@ -24,6 +24,8 @@
             kenku-fm = pkgs.callPackage ./kenku-fm/kenku-fm.nix { };
             boot-gardener = pkgs.callPackage ./boot-gardener/boot-gardener.nix { };
             nixed-error = pkgs.callPackage ./nixed-error/nixed-error.nix { };
+            qs-kwepaperpicker = pkgs.callPackage ./qs-kwepaperpicker/qs-kwepaperpicker.nix { };
+            flow-desktop = pkgs.callPackage ./flow-desktop/flow-desktop.nix { };
         } // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
             # Steam compat tools (prebuilt upstream releases), x86_64-linux only.
             proton-wineland = pkgs.callPackage ./proton-wineland/proton-wineland.nix { };
@@ -38,6 +40,8 @@
         kenku-fm = final.callPackage ./kenku-fm/kenku-fm.nix { };
         boot-gardener = final.callPackage ./boot-gardener/boot-gardener.nix { };
         nixed-error = final.callPackage ./nixed-error/nixed-error.nix { };
+        qs-kwepaperpicker = final.callPackage ./qs-kwepaperpicker/qs-kwepaperpicker.nix { };
+        flow-desktop = final.callPackage ./flow-desktop/flow-desktop.nix { };
         proton-wineland = final.callPackage ./proton-wineland/proton-wineland.nix { };
         proton-wineland-x86_64 = final.callPackage ./proton-wineland/proton-wineland.nix { variant = "x86_64"; };
       };
