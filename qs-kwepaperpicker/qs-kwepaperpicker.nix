@@ -58,15 +58,27 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     # path changes with every update, so the picker is run through a symlink
     # that `start` points at this build: `toggle` from a newer build still
     # reaches the instance started by an older one.
+    # `toggle` and `wallhaven` start the picker in the background first if it
+    # isn't running (no autostart, `stop`ped, or killed), so a key binding
+    # always works and never needs a terminal left open.
     substituteInPlace bin/kwepaperpicker \
       --replace-fail 'cfg="''${XDG_CONFIG_HOME:-$HOME/.config}/kwepaperpicker"' \
                      'cfg="@out@/share/kwepaperpicker"
 export KWEPAPERPICKER_STATE="''${XDG_CONFIG_HOME:-$HOME/.config}/kwepaperpicker"
 mkdir -p "$KWEPAPERPICKER_STATE/colors"
-link="''${XDG_STATE_HOME:-$HOME/.local/state}/kwepaperpicker/shell"' \
+link="''${XDG_STATE_HOME:-$HOME/.local/state}/kwepaperpicker/shell"
+ready() { qs -p "$link" ipc show 2>/dev/null | grep -q "^target wallpaper"; }
+ensure() {
+    [[ -e $link ]] && ready && return
+    mkdir -p "''${link%/*}"; ln -sfn "$cfg" "$link"
+    qs -p "$link" --no-duplicate --daemonize >/dev/null 2>&1 || true
+    for _ in {1..100}; do ready && return; sleep 0.1; done
+}' \
       --replace-fail 'start)     exec qs -p "$cfg" --no-duplicate ;;' \
                      'start)     mkdir -p "''${link%/*}"; ln -sfn "$cfg" "$link"
                exec qs -p "$link" --no-duplicate ;;' \
+      --replace-fail 'toggle)    exec' 'toggle)    ensure; exec' \
+      --replace-fail 'wallhaven) exec' 'wallhaven) ensure; exec' \
       --replace-fail 'qs -p "$cfg"' 'qs -p "$link"' \
       --replace-fail '(run its install.sh)' '(broken package)'
   '';
