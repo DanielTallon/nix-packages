@@ -1,15 +1,16 @@
 { lib, stdenvNoCC, fetchFromGitLab, makeWrapper, writeText, quickshell, qt6, matugen, ffmpeg, curl, python3, coreutils, material-symbols, ...}:
 
-# Upstream is a Quickshell config folder meant to live (writable) in
-# ~/.config/kwepaperpicker. Here it lives read-only in the store and is run
-# with `qs -p`; the two files it writes at runtime (its settings and the
-# matugen colour scheme) are moved to ~/.config/kwepaperpicker instead, the
-# same place upstream's install.sh would put them, so existing settings and
-# matugen templates keep working.
+# Upstream is qs-kwepaperpicker, a Quickshell config folder meant to live
+# (writable) in ~/.config/kwepaperpicker. Here it is renamed wallpaperpicker,
+# lives read-only in the store and is run with `qs -p`; the two files it
+# writes at runtime (its settings and the matugen colour scheme) are moved to
+# ~/.config/wallpaperpicker instead. An existing ~/.config/kwepaperpicker
+# (from upstream's install.sh or an older build of this package) is moved
+# there on first run, so existing settings carry over.
 let
   # The system's fonts plus Material Symbols (the picker's icons), so the
   # icon font needn't be installed system-wide.
-  fontsConf = writeText "kwepaperpicker-fonts.conf" ''
+  fontsConf = writeText "wallpaperpicker-fonts.conf" ''
     <?xml version="1.0"?>
     <!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
     <fontconfig>
@@ -19,7 +20,7 @@ let
   '';
 in
 stdenvNoCC.mkDerivation (finalAttrs: {
-  pname = "qs-kwepaperpicker";
+  pname = "wallpaperpicker";
   version = "0-unstable-2026-10-15";
 
   src = fetchFromGitLab {
@@ -36,7 +37,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
   postPatch = ''
     substituteInPlace settings/SettingsConfig.qml \
       --replace-fail 'Quickshell.shellPath("settings.json")' \
-                     'Quickshell.env("KWEPAPERPICKER_STATE") + "/settings.json"'
+                     'Quickshell.env("WALLPAPERPICKER_STATE") + "/settings.json"'
 
     # On Plasma, default to letting Plasma set the wallpaper (as upstream does
     # for KineticWE) instead of drawing a second background over the desktop.
@@ -51,9 +52,14 @@ stdenvNoCC.mkDerivation (finalAttrs: {
 
     substituteInPlace colors/Colors.qml \
       --replace-fail 'Quickshell.shellPath("colors/Colors.json")' \
-                     'Quickshell.env("KWEPAPERPICKER_STATE") + "/colors/Colors.json"'
+                     'Quickshell.env("WALLPAPERPICKER_STATE") + "/colors/Colors.json"'
 
-    # The launcher: run the store copy, and make sure the state dir exists.
+    # The launcher: its usage text and messages under the new name.
+    substituteInPlace bin/kwepaperpicker \
+      --replace-fail 'kwepaperpicker' 'wallpaperpicker'
+
+    # Run the store copy, and make sure the state dir exists (moving the old
+    # kwepaperpicker one over if that's all there is).
     # Quickshell finds a running instance by its config path, and the store
     # path changes with every update, so the picker is run through a symlink
     # that `start` points at this build: `toggle` from a newer build still
@@ -62,11 +68,13 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     # isn't running (no autostart, `stop`ped, or killed), so a key binding
     # always works and never needs a terminal left open.
     substituteInPlace bin/kwepaperpicker \
-      --replace-fail 'cfg="''${XDG_CONFIG_HOME:-$HOME/.config}/kwepaperpicker"' \
-                     'cfg="@out@/share/kwepaperpicker"
-export KWEPAPERPICKER_STATE="''${XDG_CONFIG_HOME:-$HOME/.config}/kwepaperpicker"
-mkdir -p "$KWEPAPERPICKER_STATE/colors"
-link="''${XDG_STATE_HOME:-$HOME/.local/state}/kwepaperpicker/shell"
+      --replace-fail 'cfg="''${XDG_CONFIG_HOME:-$HOME/.config}/wallpaperpicker"' \
+                     'cfg="@out@/share/wallpaperpicker"
+export WALLPAPERPICKER_STATE="''${XDG_CONFIG_HOME:-$HOME/.config}/wallpaperpicker"
+old="''${XDG_CONFIG_HOME:-$HOME/.config}/kwepaperpicker"
+[[ -d $old && ! -e $WALLPAPERPICKER_STATE ]] && mv "$old" "$WALLPAPERPICKER_STATE"
+mkdir -p "$WALLPAPERPICKER_STATE/colors"
+link="''${XDG_STATE_HOME:-$HOME/.local/state}/wallpaperpicker/shell"
 ready() { qs -p "$link" ipc show 2>/dev/null | grep -q "^target wallpaper"; }
 ensure() {
     [[ -e $link ]] && ready && return
@@ -86,11 +94,11 @@ ensure() {
   installPhase = ''
     runHook preInstall
 
-    mkdir -p $out/share/kwepaperpicker $out/bin
+    mkdir -p $out/share/wallpaperpicker $out/bin
     cp -r colors components extras modules scripts services settings shaders shell.qml \
-      $out/share/kwepaperpicker/
-    install -Dm755 bin/kwepaperpicker $out/bin/kwepaperpicker
-    substituteInPlace $out/bin/kwepaperpicker --subst-var out
+      $out/share/wallpaperpicker/
+    install -Dm755 bin/kwepaperpicker $out/bin/wallpaperpicker
+    substituteInPlace $out/bin/wallpaperpicker --subst-var out
 
     runHook postInstall
   '';
@@ -99,7 +107,7 @@ ensure() {
   # quickshell has no Qt Multimedia (video wallpapers) or image formats
   # (WebP), so those are added here.
   postFixup = ''
-    wrapProgram $out/bin/kwepaperpicker \
+    wrapProgram $out/bin/wallpaperpicker \
       --set FONTCONFIG_FILE ${fontsConf} \
       --prefix PATH : ${lib.makeBinPath [ quickshell matugen ffmpeg curl python3 coreutils ]} \
       --prefix QML_IMPORT_PATH : ${qt6.qtmultimedia}/${qt6.qtbase.qtQmlPrefix} \
@@ -112,6 +120,6 @@ ensure() {
     homepage = "https://gitlab.com/theblackdon/qs-kwepaperpicker";
     license = lib.licenses.gpl3Plus;
     platforms = lib.platforms.linux;
-    mainProgram = "kwepaperpicker";
+    mainProgram = "wallpaperpicker";
   };
 })

@@ -1,11 +1,11 @@
 {
-    description = "Standalone Nix packages: lgl-papercutter, kenku-fm, boot-gardener, proton-wineland, nixed-error, qs-kwepaperpicker, flow-desktop";
+    description = "Standalone Nix packages: lgl-papercutter, kenku-fm, boot-gardener, proton-wineland, nixed-error, wallpaperpicker, flow-desktop";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
     flake-utils.url = "github:numtide/flake-utils";
-    # OpenGL wrapper for running qs-kwepaperpicker outside NixOS
-    # (qs-kwepaperpicker-nixgl). Only its expressions are used, built with
+    # OpenGL wrapper for running wallpaperpicker outside NixOS
+    # (wallpaperpicker-nixgl). Only its expressions are used, built with
     # this flake's nixpkgs, so it brings in no inputs of its own.
     nixgl = {
       url = "github:nix-community/nixGL";
@@ -20,7 +20,7 @@
         inherit system;
         config.allowUnfreePredicate = pkg: builtins.elem (nixpkgs.lib.getName pkg) [ "kenku-fm" ];
       };
-       qs-kwepaperpicker = pkgs.callPackage ./qs-kwepaperpicker/qs-kwepaperpicker.nix { };
+       wallpaperpicker = pkgs.callPackage ./wallpaperpicker/wallpaperpicker.nix { };
        # Mesa drivers (Intel, AMD, nouveau). NVIDIA's proprietary driver needs
        # nixGL's impure auto-detection instead; see the README.
        nixGLIntel = (import "${nixgl}/default.nix" {
@@ -39,10 +39,10 @@
             kenku-fm = pkgs.callPackage ./kenku-fm/kenku-fm.nix { };
             boot-gardener = pkgs.callPackage ./boot-gardener/boot-gardener.nix { };
             nixed-error = pkgs.callPackage ./nixed-error/nixed-error.nix { };
-            inherit qs-kwepaperpicker;
+            inherit wallpaperpicker;
             # The same picker, run through nixGL, for Nix on other distros.
-            qs-kwepaperpicker-nixgl = pkgs.writeShellScriptBin "kwepaperpicker" ''
-              exec ${nixGLIntel}/bin/nixGLIntel ${nixpkgs.lib.getExe qs-kwepaperpicker} "$@"
+            wallpaperpicker-nixgl = pkgs.writeShellScriptBin "wallpaperpicker" ''
+              exec ${nixGLIntel}/bin/nixGLIntel ${nixpkgs.lib.getExe wallpaperpicker} "$@"
             '';
             flow-desktop = pkgs.callPackage ./flow-desktop/flow-desktop.nix { };
         } // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
@@ -59,7 +59,7 @@
         kenku-fm = final.callPackage ./kenku-fm/kenku-fm.nix { };
         boot-gardener = final.callPackage ./boot-gardener/boot-gardener.nix { };
         nixed-error = final.callPackage ./nixed-error/nixed-error.nix { };
-        qs-kwepaperpicker = final.callPackage ./qs-kwepaperpicker/qs-kwepaperpicker.nix { };
+        wallpaperpicker = final.callPackage ./wallpaperpicker/wallpaperpicker.nix { };
         flow-desktop = final.callPackage ./flow-desktop/flow-desktop.nix { };
         proton-wineland = final.callPackage ./proton-wineland/proton-wineland.nix { };
         proton-wineland-x86_64 = final.callPackage ./proton-wineland/proton-wineland.nix { variant = "x86_64"; };

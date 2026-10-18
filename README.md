@@ -8,7 +8,7 @@ use and shared here in case they're useful to anyone else:
 - **[`boot-gardener`](https://github.com/DanielTallon/nix-packages/blob/main/boot-gardener)** — Boot Gardener, a bash (`jq` + `fzf`) tool for NixOS to pick, pin, prune, harvest, or garbage-collect boot-menu generations on Limine, systemd-boot, or GRUB, plus a rescue mode for a full `/boot` partition. Own project, MIT licensed.
 - **[`proton-wineland`](./proton-wineland)** — [Proton Wineland](https://github.com/nanomatters/proton-cachyos), a Wayland-focused Proton fork, packaged as a Steam compatibility tool. Restores DLSS, frame generation and ray/path tracing in *The Witcher 3* 5.x with no exe patching. x86_64-linux only. See [proton-wineland](#proton-wineland) below.
 - **[`nixed-error`](./nixed-error)** — explains a failed NixOS rebuild in plain words: what went wrong, the file and line, whether it's your config, upstream, or your machine, and how to fix it. Rule-based (no LLM, no network). Own project, still in testing.
-- **[`qs-kwepaperpicker`](./qs-kwepaperpicker)** — [kwepaperpicker](https://gitlab.com/theblackdon/qs-kwepaperpicker), a swatch-deck wallpaper picker for Quickshell. Brings its own icon font, and on KDE Plasma hands the chosen wallpaper to Plasma by default. `qs-kwepaperpicker-nixgl` is the same picker for Nix on other distros. See [qs-kwepaperpicker](#qs-kwepaperpicker) below. GPL-3.0-or-later.
+- **[`wallpaperpicker`](./wallpaperpicker)** — [kwepaperpicker](https://gitlab.com/theblackdon/qs-kwepaperpicker), packaged here as `wallpaperpicker`, a swatch-deck wallpaper picker for Quickshell. Brings its own icon font, and on KDE Plasma hands the chosen wallpaper to Plasma by default. `wallpaperpicker-nixgl` is the same picker for Nix on other distros. See [wallpaperpicker](#wallpaperpicker) below. GPL-3.0-or-later.
 - **[`flow-desktop`](./flow-desktop)** — [Flow Desktop](https://github.com/Flow-Tube/Flow-Desktop), a privacy-respecting YouTube and YouTube Music client (Tauri 2), built from source. Based on [olafkfreund/nixos-FlowTube](https://github.com/olafkfreund/nixos-FlowTube)'s package, tracking upstream main, plus a local patch that adds thumbnail previews to the seekbar. GPL-3.0.
 
 Each package is exposed on its own — installing or building one never pulls in the others.
@@ -21,7 +21,7 @@ nix run github:DanielTallon/nix-packages#lgl-papercutter
 nix run github:DanielTallon/nix-packages#kenku-fm
 nix run github:DanielTallon/nix-packages#boot-gardener
 nix run github:DanielTallon/nix-packages#nixed-error
-nix run github:DanielTallon/nix-packages#qs-kwepaperpicker
+nix run github:DanielTallon/nix-packages#wallpaperpicker
 nix run github:DanielTallon/nix-packages#flow-desktop
 ```
 **Run without installing, and without flakes enabled:**
@@ -30,7 +30,7 @@ nix run --extra-experimental-features "nix-command flakes" github:DanielTallon/n
 nix run --extra-experimental-features "nix-command flakes" github:DanielTallon/nix-packages#kenku-fm
 nix run --extra-experimental-features "nix-command flakes" github:DanielTallon/nix-packages#boot-gardener
 nix run --extra-experimental-features "nix-command flakes" github:DanielTallon/nix-packages#nixed-error
-nix run --extra-experimental-features "nix-command flakes" github:DanielTallon/nix-packages#qs-kwepaperpicker
+nix run --extra-experimental-features "nix-command flakes" github:DanielTallon/nix-packages#wallpaperpicker
 nix run --extra-experimental-features "nix-command flakes" github:DanielTallon/nix-packages#flow-desktop
 ```
 
@@ -44,7 +44,7 @@ nix profile install github:DanielTallon/nix-packages#lgl-papercutter
 nix profile install github:DanielTallon/nix-packages#kenku-fm
 nix profile install github:DanielTallon/nix-packages#boot-gardener
 nix profile install github:DanielTallon/nix-packages#nixed-error
-nix profile install github:DanielTallon/nix-packages#qs-kwepaperpicker
+nix profile install github:DanielTallon/nix-packages#wallpaperpicker
 nix profile install github:DanielTallon/nix-packages#flow-desktop
 ```
 
@@ -66,7 +66,7 @@ inputs.nix-packages.url = "github:DanielTallon/nix-packages";
 nixpkgs.overlays = [ inputs.nix-packages.overlays.default ];
 # now available anywhere in your config as pkgs.lgl-papercutter / pkgs.kenku-fm /
 # pkgs.boot-gardener / pkgs.proton-wineland / pkgs.nixed-error /
-# pkgs.qs-kwepaperpicker / pkgs.flow-desktop
+# pkgs.wallpaperpicker / pkgs.flow-desktop
 ```
 
 ## A note on `kenku-fm`
@@ -76,21 +76,21 @@ This flake scopes nixpkgs' `allowUnfreePredicate` to just this one package (see 
 building or installing it works out of the box — no `NIXPKGS_ALLOW_UNFREE`
 or `--impure` needed.
 
-## qs-kwepaperpicker
+## wallpaperpicker
 
 Start the picker, then open and close it from a key binding or a second terminal:
 
 ```sh
-nix run github:DanielTallon/nix-packages#qs-kwepaperpicker
-nix run github:DanielTallon/nix-packages#qs-kwepaperpicker -- toggle
+nix run github:DanielTallon/nix-packages#wallpaperpicker
+nix run github:DanielTallon/nix-packages#wallpaperpicker -- toggle
 ```
 
-(Installed, those are `kwepaperpicker` and `kwepaperpicker toggle`. `kwepaperpicker --help` lists the rest.)
+(Installed, those are `wallpaperpicker` and `wallpaperpicker toggle`. `wallpaperpicker --help` lists the rest.)
 
 - **Desktop:** needs a Wayland desktop Quickshell runs on, such as KDE Plasma, Hyprland, Sway or niri. GNOME doesn't work.
 - **Font:** the Material Symbols icon font comes with the package. Nothing to install.
 - **Wallpaper:** on KDE Plasma it hands the chosen wallpaper to Plasma (`plasma-apply-wallpaperimage {}`). Elsewhere it draws the wallpaper itself, videos included. Plasma's command only takes images, so to use video wallpapers on Plasma, clear the command in the picker's settings (the gear at the top right).
-- **Files:** settings and the matugen colour scheme are kept in `~/.config/kwepaperpicker`. Wallpapers are read from `~/Pictures/wallpapers` by default.
+- **Files:** settings and the matugen colour scheme are kept in `~/.config/wallpaperpicker` (an old `~/.config/kwepaperpicker` is moved there on first run). Wallpapers are read from `~/Pictures/wallpapers` by default.
 
 ### Other distros with Nix
 
@@ -104,14 +104,14 @@ to a key (on Plasma: System Settings → Shortcuts → Add Command).
 For Mesa drivers (Intel, AMD, nouveau), use the build that runs through [nixGL](https://github.com/nix-community/nixGL):
 
 ```sh
-nix run github:DanielTallon/nix-packages#qs-kwepaperpicker-nixgl -- toggle
+nix run github:DanielTallon/nix-packages#wallpaperpicker-nixgl -- toggle
 ```
 
 For NVIDIA's proprietary driver (any GeForce card on the official driver, including
 the RTX 50 series), nixGL has to detect the installed driver, which needs `--impure`:
 
 ```sh
-nix run --impure github:nix-community/nixGL -- nix run github:DanielTallon/nix-packages#qs-kwepaperpicker -- toggle
+nix run --impure github:nix-community/nixGL -- nix run github:DanielTallon/nix-packages#wallpaperpicker -- toggle
 ```
 
 The first NVIDIA run downloads the driver matching yours from NVIDIA, a few hundred MB.
@@ -120,7 +120,7 @@ After the distro updates the driver, reboot before running it again so the versi
 Without flakes enabled, both `nix run`s need the flag:
 
 ```sh
-nix run --impure --extra-experimental-features "nix-command flakes" github:nix-community/nixGL -- nix run --extra-experimental-features "nix-command flakes" github:DanielTallon/nix-packages#qs-kwepaperpicker -- toggle
+nix run --impure --extra-experimental-features "nix-command flakes" github:nix-community/nixGL -- nix run --extra-experimental-features "nix-command flakes" github:DanielTallon/nix-packages#wallpaperpicker -- toggle
 ```
 
 Always open it with the nixGL command. A plain `toggle` closes and opens a picker that's
@@ -168,8 +168,8 @@ nix-packages/
 │   └── boot-gardener.nix
 ├── nixed-error/
 │   └── nixed-error.nix
-├── qs-kwepaperpicker/
-│   └── qs-kwepaperpicker.nix
+├── wallpaperpicker/
+│   └── wallpaperpicker.nix
 ├── flow-desktop/
 │   ├── flow-desktop.nix
 │   └── flow-desktop-storyboard-preview.patch
