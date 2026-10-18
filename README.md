@@ -94,19 +94,40 @@ nix run github:DanielTallon/nix-packages#qs-kwepaperpicker -- toggle
 
 ### Other distros with Nix
 
-Programs from Nix often can't find the graphics drivers on other distros. For Mesa drivers (Intel, AMD, nouveau), use the build that runs through [nixGL](https://github.com/nix-community/nixGL):
+Programs from Nix often can't find the graphics drivers on other distros. If the log shows
+`qt.qpa.wayland: EGL not available` and the picker never appears, this is why.
+
+`toggle` starts the picker in the background if it isn't running, then opens it, so on
+other distros one command does both. Run the same command again to close it, or bind it
+to a key (on Plasma: System Settings → Shortcuts → Add Command).
+
+For Mesa drivers (Intel, AMD, nouveau), use the build that runs through [nixGL](https://github.com/nix-community/nixGL):
 
 ```sh
-nix run github:DanielTallon/nix-packages#qs-kwepaperpicker-nixgl
+nix run github:DanielTallon/nix-packages#qs-kwepaperpicker-nixgl -- toggle
 ```
 
-For NVIDIA's proprietary driver, nixGL has to detect the installed driver, which needs `--impure`:
+For NVIDIA's proprietary driver (any GeForce card on the official driver, including
+the RTX 50 series), nixGL has to detect the installed driver, which needs `--impure`:
 
 ```sh
-nix run --impure github:nix-community/nixGL -- nix run github:DanielTallon/nix-packages#qs-kwepaperpicker
+nix run --impure github:nix-community/nixGL -- nix run github:DanielTallon/nix-packages#qs-kwepaperpicker -- toggle
 ```
 
-Don't use either of these on NixOS. They replace the system's drivers with nixGL's.
+The first NVIDIA run downloads the driver matching yours from NVIDIA, a few hundred MB.
+After the distro updates the driver, reboot before running it again so the versions match.
+
+Without flakes enabled, both `nix run`s need the flag:
+
+```sh
+nix run --impure --extra-experimental-features "nix-command flakes" github:nix-community/nixGL -- nix run --extra-experimental-features "nix-command flakes" github:DanielTallon/nix-packages#qs-kwepaperpicker -- toggle
+```
+
+Always open it with the nixGL command. A plain `toggle` closes and opens a picker that's
+already running, but if the picker isn't running (after a reboot, say), it starts it
+without the drivers.
+
+Don't use any of these on NixOS. They replace the system's drivers with nixGL's.
 
 ## Updating a package
 
