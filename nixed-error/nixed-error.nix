@@ -1872,7 +1872,16 @@ let
                     logged.append((f.stat().st_mtime, d))
                     break
         if logged:
-            _, drv = max(logged)
+            # When a build fails, Nix kills the others still running, and their logs are closed just after the
+            # failed one's. So the newest log is often an interrupted build; the failure is the earliest log
+            # in that last burst.
+            logged.sort(reverse=True)
+            burst = [logged[0]]
+            for t, d in logged[1:]:
+                if burst[-1][0] - t > 3:
+                    break
+                burst.append((t, d))
+            _, drv = burst[-1]
             return (f"error: Cannot build '{drv}'.\n       Reason: builder failed "
                     f"(log kept from the last attempt).\n"), how + "; it evaluates, so used a failed build log"
 
