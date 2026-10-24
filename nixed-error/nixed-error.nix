@@ -1480,15 +1480,101 @@ let
                               "restarts the home-manager service when its config does.)")
 
 
-    def read_build_log(drv: str) -> str | None:
+    def build_log_file(drv: str) -> Path | None:
         name = Path(drv).name
-        for f in (NIX_LOG_DIR / name[:2] / (name[2:] + ".bz2"), NIX_LOG_DIR / name[:2] / name[2:]):
-            try:
-                data = f.read_bytes()
-                return (bz2.decompress(data) if f.suffix == ".bz2" else data).decode(errors="replace")
-            except OSError:
-                continue
+        return next((f for f in (NIX_LOG_DIR / name[:2] / (name[2:] + ".bz2"), NIX_LOG_DIR / name[:2] / name[2:])
+                     if f.exists()), None)
+
+
+    def read_build_log(drv: str) -> str | None:
+        if not (f := build_log_file(drv)):
+            return None
+        try:
+            data = f.read_bytes()
+            return (bz2.decompress(data) if f.suffix == ".bz2" else data).decode(errors="replace")
+        except (OSError, ValueError):
+            return None
+
+
+    # A failed builder's last lines say why it stopped. A build Nix cut off (because another one failed, or Ctrl-C)
+    # just ends, often with nothing in it at all.
+    BUILD_ERROR_RE = re.compile(
+        r"\berror\b|\bfail(?:ed|ure|s)?\b|traceback|\bfatal\b|panicked|no such file|not found|undefined reference"
+        r"|\*\*\*|exit (?:code|status) [1-9]|segmentation fault|\bkilled\b|\baborted\b|\bassert", re.I)
+
+
+    def log_shows_failure(log: str) -> bool:
+        return any(BUILD_ERROR_RE.search(l) for l in [l for l in log.splitlines() if l.strip()][-25:])
+
+
+    # derivations NixOS and home-manager make to gather what you install, by the option that fills them
+    COLLECTORS = {
+        "system-path": "environment.systemPackages",
+        "user-environment": "users.users.<name>.packages",
+        "home-manager-path": "home.packages",
+        "home-manager-files": "home.file",
+        "etc": "environment.etc",
+        "man-paths": "man pages",
+    }
+
+
+    def why_depends(root: str, drv: str) -> list[str]:
+        """Derivation names from root down to drv, from `nix why-depends` (both .drv files must still exist)."""
+        try:
+            p = run(["nix", "--extra-experimental-features", "nix-command", "why-depends", "--derivation", root, drv],
+                    timeout=30)
+        except (OSError, subprocess.TimeoutExpired):
+            return []
+        return re.findall(r"/nix/store/[a-z0-9]{32}-(\S+?)\.drv", ANSI_RE.sub("", p.stdout)) if p.returncode == 0 else []
+
+
+    def made_by_module(flake: Flake, name: str) -> Loc | None:
+        """The NixOS or home-manager module (in a flake input) that makes a derivation called `name`."""
+        needle = f'"{name}"'
+        for base in flake.inputs.values():
+            for d in (base / "modules", base / "nixos" / "modules"):
+                for f in sorted(d.rglob("*.nix")) if d.is_dir() else []:
+                    for i, line in enumerate(read_lines(f)):
+                        if needle in line and not line.lstrip().startswith("#"):
+                            return Loc(flake.origin(str(f)), i + 1)
         return None
+
+
+    def trace_build(flake: Flake, text: str, drv: str) -> tuple[str, Loc | None, str, str, str]:
+        """What needs a failed build: a note with the chain, the line in your files to act on, what that line
+        is ("package", "option" or "") with its name, and the input whose module made the failed one."""
+        roots = (re.findall(r"Cannot build '(/nix/store/\S+?\.drv)'\.\s*Reason: \d+ dependenc", text)
+                 + re.findall(r"dependencies of derivation '(/nix/store/\S+?\.drv)' failed", text))
+        root = next((r for r in roots if "-nixos-system-" in r), roots[-1] if roots else None)
+        chain = why_depends(root, drv) if root and root != drv else []
+        if len(chain) < 2:
+            return "", None, "", "", ""
+        failed, *outer = reversed(chain)  # innermost first from here
+        system = chain[0].startswith("nixos-system-")
+        shown = " → ".join(f"{n} ({COLLECTORS[n]})" if n in COLLECTORS else n for n in chain[1 if system else 0:])
+        note = f"Your system needs it through {shown}." if system else f"It's needed through {shown}."
+        # a package your files install that needs it (outermost first, as in the broken-package handler)
+        pkgs_ = [n for n in reversed(outer) if n not in COLLECTORS and VERSION_RE.search(n)
+                 and not n.startswith("nixos-system-")]
+        for i, n in enumerate(pkgs_):
+            if use := pkg_use(flake, drv_attr(n).split(".")[-1])[0]:
+                via = [drv_attr(x) for x in pkgs_[i + 1:]] + [VERSION_RE.sub("", failed)]
+                return (note + f" `{drv_attr(n)}` ({use.describe()}) needs " + ", which needs ".join(f"`{v}`" for v in via)
+                        + "."), use, "package", drv_attr(n), ""
+        # else a module made it: find the module, and where you turn that module on
+        for n in [failed, *outer]:
+            if n in COLLECTORS or n.startswith("nixos-system-"):
+                break
+            if mod := made_by_module(flake, n):
+                src = "\n".join(read_lines(mod.origin.real))
+                opt = m[1] if (m := re.search(r"\bcfg\s*=\s*config\.([\w.]+)\s*;", src)) else None
+                path = mod.origin.display.split(": ", 1)[-1]
+                note += f" `{n}` is made by {mod.origin.label}'s {path} (line {mod.line})"
+                if opt and (on := flake.find([rf"\b{re.escape(opt)}\b"], regex=True)):
+                    return note + f", for `{opt}`, which you set on {on.describe()}.", on, "option", opt, mod.origin.label
+                return (note + (f", for `{opt}`." if opt else "."), None, "option" if opt else "", opt or "",
+                        mod.origin.label)
+        return note, None, "", "", ""
 
 
     def h_build(rep: Report, vars: dict, flake: Flake, rules: list[Rule], text: str) -> None:
@@ -1496,6 +1582,7 @@ let
         name = re.sub(r"^/nix/store/[a-z0-9]{32}-|\.drv$", "", drv)
         vars["name"] = name
         vars["pname"] = pname = re.sub(r"-\d[\w.+~-]*$", "", name)
+        chain_note, at, kind, what, made_in = trace_build(flake, text, drv) if drv else ("", None, "", "", "")
         log = read_build_log(drv) if drv else None
         if log is None:
             log = "\n".join(LOG_LINE_RE.findall(text))
@@ -1548,9 +1635,22 @@ let
                 rep.blame = "upstream"
             vars["owner_note"] = (f"`{pname}` is not defined in your config, so it comes from nixpkgs or "
                                   "another input. This is usually not caused by anything you typed.")
-            vars["advice"] = (f"Check whether it's already reported (github.com/NixOS/nixpkgs/issues, search "
+            if kind == "package":
+                remove = f"remove `{what}` from line {at.line} of {at.origin.display}"
+            elif kind == "option" and at:
+                remove = f"turn off `{what}` (line {at.line} of {at.origin.display})"
+            elif kind == "option":
+                remove = f"turn off `{what}`"
+            else:
+                remove = "remove the package"
+            rep.loc = at
+            tracker = {"home-manager": "github.com/nix-community/home-manager/issues"}.get(
+                made_in, "github.com/NixOS/nixpkgs/issues")
+            vars["advice"] = (f"Check whether it's already reported ({tracker}, search "
                               f"\"{pname}\"). Meanwhile, go back to your previous flake.lock "
-                              "(`git checkout flake.lock`) or remove the package for now.")
+                              f"(`git checkout flake.lock`) or {remove} for now.")
+        if chain_note:
+            vars["owner_note"] = chain_note + "\n\n" + vars["owner_note"]
         rep.others = []
 
 
@@ -2010,30 +2110,25 @@ let
             how = f"re-evaluated {cfg.ref}"
         p = run_with_timer(cmd, "Re-checking your config to catch the error")
         if p.returncode != 0:
-            return p.stderr + p.stdout, how
+            return p.stderr + p.stdout, how, ""
 
-        # Evaluation is fine, so it was a build failure. Nix keeps logs of failed builds.
+        # Evaluation is fine, so it was a build failure. Nix keeps the logs of builds that didn't finish:
+        # the one that failed, and the ones it cut off when that happened (or when you pressed Ctrl-C).
         drvs = re.findall(r"^\s+(/nix/store/\S+\.drv)$", p.stderr + p.stdout, re.M)
-        logged = []
-        for d in drvs:
-            name = Path(d).name
-            for f in (NIX_LOG_DIR / name[:2] / (name[2:] + ".bz2"), NIX_LOG_DIR / name[:2] / name[2:]):
-                if f.exists():
-                    logged.append((f.stat().st_mtime, d))
-                    break
-        if logged:
-            # When a build fails, Nix kills the others still running, and their logs are closed just after the
-            # failed one's. So the newest log is often an interrupted build; the failure is the earliest log
-            # in that last burst.
-            logged.sort(reverse=True)
-            burst = [logged[0]]
-            for t, d in logged[1:]:
-                if burst[-1][0] - t > 3:
-                    break
-                burst.append((t, d))
-            _, drv = burst[-1]
-            return (f"error: Cannot build '{drv}'.\n       Reason: builder failed "
-                    f"(log kept from the last attempt).\n"), how + "; it evaluates, so used a failed build log"
+        drv, cut_off = failed_build(drvs)
+        if drv:
+            # the system's own derivation, so the build handler can ask Nix what needs the failed one
+            top = next((d for d in drvs if re.search(r"/[a-z0-9]{32}-nixos-system-", d)), None)
+            return (f"error: Cannot build '{drv}'.\n       Reason: builder failed (log kept from the last attempt).\n"
+                    + (f"error: Cannot build '{top}'.\n       Reason: 1 dependency failed.\n" if top else ""),
+                    how + "; it evaluates, so used a failed build log", "")
+        note = ""
+        if cut_off:
+            when = time.strftime("%Y-%m-%d %H:%M", time.localtime(max(cut_off)))
+            n = len(cut_off)
+            note = (f" Your last build stopped partway: {n} build{'s' if n > 1 else '''} it started (up to {when}) "
+                    f"didn't finish, but {'none of their logs ends' if n > 1 else "its log doesn't end"} in an error, "
+                    "so it was interrupted, not failed. Rebuilding finishes them.")
 
         # Builds fine too: maybe the switch itself (activation) failed. The unit handler reads the journal.
         units = []
@@ -2043,8 +2138,30 @@ let
         if units:
             scope, unit = next((u for u in units if "home-manager" in u[1]), units[0])
             also = "".join(f"\nalso failed: {u}" for _, u in units if u != unit)
-            return f"error: {scope}unit {unit} failed{also}\n", how + f"; it builds, so checked the failed unit {unit}"
-        return None, how
+            return (f"error: {scope}unit {unit} failed{also}\n", how + f"; it builds, so checked the failed unit {unit}",
+                    "")
+        return None, how, note
+
+
+    def failed_build(drvs: list[str]) -> tuple[str | None, list[float]]:
+        """The build that failed, from Nix's kept logs; else the times of logs from builds that were only cut off."""
+        failed, cut_off = [], []
+        for d in drvs:
+            if not (f := build_log_file(d)):
+                continue
+            t = f.stat().st_mtime
+            (failed if log_shows_failure(read_build_log(d) or "") else cut_off).append((t, d))
+        if not failed:
+            return None, [t for t, _ in cut_off]
+        # When a build fails, Nix kills the others still running, and their logs are closed just after the
+        # failed one's. Of the failed-looking logs in that last burst, the failure is the earliest.
+        failed.sort(reverse=True)
+        burst = [failed[0]]
+        for t, d in failed[1:]:
+            if burst[-1][0] - t > 3:
+                break
+            burst.append((t, d))
+        return burst[-1][1], []
 
 
     # ─── output ──────────────────────────────────────────────────────────────────
@@ -2271,14 +2388,14 @@ let
                            "a configuration.nix), or pipe in the output of the failed rebuild:", "  "))
                 print(pipe_hint("sudo nixos-rebuild switch"))
                 return 2
-            text, source = reproduce(cfg)
+            text, source, note = reproduce(cfg)
             if text is None:
                 # nh needs a flake (or $NH_OS_FLAKE); a classic configuration.nix gets nixos-rebuild
                 switch = ("nh os switch" if os.environ.get("NH_OS_FLAKE") or (shutil.which("nh") and cfg.kind == "flake")
                           else "sudo nixos-rebuild switch")
                 print(c("32", "\n✓ Couldn't reproduce a failure."))
                 print(wrap("Your config evaluates, nothing that needs building has a failed log, and no "
-                           "systemd units are in a failed state. If the rebuild failed while switching "
+                           f"systemd units are in a failed state.{note} If the rebuild failed while switching "
                            "(for example installing the bootloader), pipe its output in instead:", "  "))
                 print(pipe_hint(switch))
                 return 0
