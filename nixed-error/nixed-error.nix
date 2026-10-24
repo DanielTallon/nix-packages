@@ -1226,6 +1226,109 @@ let
         vars["explain_text"], vars["fix_text"] = explain, fix
 
 
+    DRV_FRAME_RE = re.compile(r"while evaluating derivation '(?P<name>[^']+)'")
+    VERSION_RE = re.compile(r"-\d[\w.+~-]*$")
+    LANG_PREFIX_RE = re.compile(r"^python[\d.]+-")
+
+
+    def drv_attr(drv: str) -> str:
+        """The attribute for a derivation name: `python3.14-fastmcp-3.4.7` is `python3Packages.fastmcp`."""
+        name = VERSION_RE.sub("", drv)
+        return "python3Packages." + LANG_PREFIX_RE.sub("", name) if LANG_PREFIX_RE.match(name) else name
+
+
+    def older_nixpkgs(flake: Flake) -> str | None:
+        """The nixpkgs your flake.lock pinned before the current one (from git history), as a flake URL."""
+        def locked(src: str) -> dict | None:
+            try:
+                lock = json.loads(src)
+                node = lock["nodes"]["root"]["inputs"]["nixpkgs"]
+                return lock["nodes"][node]["locked"] if isinstance(node, str) else None
+            except (json.JSONDecodeError, KeyError, TypeError):
+                return None
+
+        now = locked("\n".join(read_lines(flake.dir / "flake.lock"))) if flake.dir else None
+        if not now:
+            return None
+        # newest first; an update that isn't committed yet makes the first one the old pin
+        for commit in git(flake, "log", "-n", "20", "--format=%H", "--", "flake.lock").split():
+            old = locked(git(flake, "show", f"{commit}:flake.lock"))
+            if old and old.get("rev") != now.get("rev"):
+                if old.get("type") == "github" and old.get("rev"):
+                    return f"github:{old['owner']}/{old['repo']}/{old['rev']}"
+                return None
+        return None
+
+
+    def h_broken(rep: Report, vars: dict, flake: Flake, rules, text: str) -> None:
+        """A broken package: nixpkgs' reason, what in your files pulls it in (often a package that depends on it),
+        and how to get past it: remove that, take it from the nixpkgs you had before, or wait for a fix."""
+        pkg = vars.get("pkg", "")
+        name = drv_attr(pkg)
+        # Nix names each derivation it was evaluating, outermost first (man-paths > mcp-nixos > fastmcp). The first
+        # one your files name is what you installed. Unversioned ones (man-paths, system-path, etc) are NixOS wrappers.
+        chain = [d for d in dict.fromkeys(m["name"] for m in DRV_FRAME_RE.finditer(text))
+                 if d != pkg and VERSION_RE.search(d) and not d.startswith("nixos-system-")]
+        top, via = name, []
+        for i, d in enumerate(chain):
+            if use := pkg_use(flake, drv_attr(d).split(".")[-1])[0]:
+                top, via = drv_attr(d), [drv_attr(x) for x in chain[i + 1:]]
+                break
+        else:
+            use = pkg_use(flake, name.split(".")[-1])[0]
+            if not use and chain:  # installed some way your files don't spell out: the trace still says through what
+                top, via = drv_attr(chain[0]), [drv_attr(x) for x in chain[1:]]
+
+        # the package's own `broken = …` line says when it's broken (e.g. `lib.versionAtLeast mcp.version "2"`)
+        cond = None
+        if m := re.search(rf"[‘']{re.escape(pkg)}[’'] in (?P<path>\S+?\.nix):\d+", text):
+            lines = read_lines(flake.origin(m["path"]).real)
+            if b := next((re.match(r"\s*broken\s*=\s*(.+?);?\s*$", l.split("#")[0]) for l in lines
+                          if re.match(r"\s*broken\s*=\s*\S", l)), None):
+                cond = b[1] if b[1] != "true" else None
+
+        explain = f"nixpkgs has marked `{pkg}` as broken, so it refuses to evaluate it."
+        if cond:
+            explain += f" Its package marks it broken when `{cond}`, which is true in the nixpkgs you have now."
+        else:
+            explain += " That usually means it fails to build, or doesn't work, with the packages around it."
+        needs = ", which needs ".join(f"`{v}`" for v in via + [name])
+        if use and top != name:
+            explain += f" Nothing in your files names it: `{top}` ({use.describe()}) needs {needs}."
+        elif use:
+            explain += f" It's pulled in by {use.describe()}."
+        elif top != name:
+            explain += f" Nothing in your files names it, but Nix reached it through `{top}`, which needs {needs}."
+        else:
+            explain += " Nothing in your files names it, so something you use depends on it."
+        if use:
+            rep.loc, rep.others, rep.context = use, [], ""
+
+        where = f" on line {use.line} of {use.origin.display}" if use else ""
+        known = use or top != name
+        old = older_nixpkgs(flake)
+        fix = [f"Remove `{top}`{where.replace(' on ', ' from ', 1)} for now." if known
+               else f"Remove the package that depends on `{name}` for now."]
+        if known:
+            fix.append(
+                f"Or keep `{top}` from an older nixpkgs"
+                + (", the one you had before your last update" if old else "") + ". Add it as a second flake input:\n"
+                f"    inputs.nixpkgs-pinned.url = \"{old or 'github:NixOS/nixpkgs/<an older revision>'}\";\n"
+                f"and use it in place of `{top}`{where}:\n"
+                f"    inputs.nixpkgs-pinned.legacyPackages.''${{pkgs.stdenv.hostPlatform.system}}.{top}\n"
+                "(`inputs` has to reach that module, for example through `specialArgs`.)")
+        fix.append(f"Or wait for nixpkgs to fix `{name}`, then update your flake"
+                   + (" and put it back." if known else "."))
+        if "has problems" in text:
+            k = m["k"] if (m := re.search(r"^\s*(?P<k>[^\s=]+)\.broken\s*=", text, re.M)) else name
+            anyway = f'nixpkgs.config.problems.handlers.{k}.broken = "warn";'
+        else:
+            anyway = "nixpkgs.config.allowBroken = true;"
+        fix.append(f"To try it anyway:\n    {anyway}\nA package is marked broken because it fails to build or "
+                   "doesn't work, so this rarely gets you further.")
+        vars["explain_text"], vars["fix_text"] = explain, "\n\n".join(fix)
+
+
     def git(flake: Flake, *args: str) -> str:
         if not flake.dir:
             return ""
@@ -1824,6 +1927,7 @@ let
         "hm_file": h_hm_file,
         "unfree": h_unfree,
         "insecure": h_insecure,
+        "broken": h_broken,
         "option_type": h_option_type,
         "unit": h_unit,
     }
@@ -2042,7 +2146,7 @@ let
         color, label, sub = BLAME[rep.blame]
         print()
         print(c("1", f"✗ {rep.title}"))
-        print(f"  {c('2', 'Whose:')} {c(color + ';1', label)} {c('2', '— ' + (rep.loc.origin.label if rep.blame == 'upstream' and rep.loc else sub))}")
+        print(f"  {c('2', 'Whose:')} {c(color + ';1', label)} {c('2', '— ' + (rep.loc.origin.label if rep.blame == 'upstream' and rep.loc and rep.loc.origin.owner != 'you' else sub))}")
         if rep.loc:
             print(f"  {c('2', 'Where:')} {rep.loc.describe()}")
         for o in rep.others:
@@ -2579,11 +2683,15 @@ let
     [[rule]]
     id = "broken"
     title = "Package is marked broken"
-    match = ''''Package [‘'](?P<pkg>[^’']+)[’'][^\n]*is marked as broken''''
+    # "is marked as broken" in older nixpkgs; now a "has problems:" list with a "- broken:" entry
+    match = ''''(?:Refusing to evaluate package|Package) [‘'](?P<pkg>[^’']+)[’'][^\n]*(?:is marked as broken|because it has problems:\n(?:[ \t]*- .*\n)*?[ \t]*- broken:)''''
     priority = 85
     blame = "upstream"
-    explain = "nixpkgs maintainers have marked `{{pkg}}` as broken in your nixpkgs version, so it won't build."
-    fix = "Wait for a fix and update your flake, remove it for now, or try anyway with `nixpkgs.config.allowBroken = true;`."
+    # the handler quotes the package's `broken = …` condition, follows Nix's trace from the broken package to the
+    # package your files name (mcp-nixos > fastmcp > fastmcp-slim), and offers the nixpkgs from before your last update
+    handler = "broken"
+    explain = "{{explain_text}}"
+    fix = "{{fix_text}}"
 
     [[rule]]
     id = "unsupported-platform"
