@@ -1109,9 +1109,8 @@ let
         vars["fix_text"] = fix
 
 
-    def h_unfree(rep: Report, vars: dict, flake: Flake, rules, text: str) -> None:
-        """An unfree package: show what pulls it in, and an `allowUnfree = false` or a predicate that blocks it."""
-        pkg, pname = vars.get("pkg", ""), vars.get("pname", "")
+    def pkg_use(flake: Flake, pname: str) -> tuple[Loc | None, str]:
+        """Where your files pull a package in, and the package set it comes from (pkgs, pkgs-stable, ...)."""
         head = re.escape(pname.split("-")[0])
         set_re = rf"\b(?P<set>[\w-]*pkgs[\w-]*)\.{re.escape(pname)}(?![\w-])"  # pkgs.foo, pkgs-stable.foo, ...
         # Drivers and modules pull packages in without naming them: nvidia-x11 comes from videoDrivers / hardware.nvidia.
@@ -1119,6 +1118,13 @@ let
                           rf"\b(?:hardware|programs|services)\.{head}(?![\w-])", rf"(?<![\w.\"-]){re.escape(pname)}(?![\w-])"],
                          regex=True)
         pset = m["set"] if use and (m := re.search(set_re, read_lines(use.origin.real)[use.line - 1])) else "pkgs"
+        return use, pset
+
+
+    def h_unfree(rep: Report, vars: dict, flake: Flake, rules, text: str) -> None:
+        """An unfree package: show what pulls it in, and an `allowUnfree = false` or a predicate that blocks it."""
+        pkg, pname = vars.get("pkg", ""), vars.get("pname", "")
+        use, pset = pkg_use(flake, pname)
         explain = f"`{pkg}` has a non-free license, and NixOS only installs free software unless you allow it."
         if use:
             explain += f" It's pulled in by {use.describe()}."
@@ -1178,6 +1184,45 @@ let
             fix = f"Add \"{pname}\" to the list in your `allowUnfreePredicate` on line {pred.line} of {pred.origin.display}."
         else:
             fix = f"Allow all unfree packages:\n    nixpkgs.config.allowUnfree = true;\nor only this one:\n    {predicate}\n{hm}"
+        vars["explain_text"], vars["fix_text"] = explain, fix
+
+
+    def h_insecure(rep: Report, vars: dict, flake: Flake, rules, text: str) -> None:
+        """An insecure package: quote nixpkgs' reasons, and whether you or a dependency pull it in."""
+        pkg, pname = vars.get("pkg", ""), vars.get("pname", "")
+        m = re.search(r"Known issues:[ \t]*\n((?:[ \t]*- .*\n?)+)", text)
+        issues = [l.strip()[2:] for l in m[1].splitlines()] if m else []
+        # nixpkgs also marks packages that upstream stopped working on: no fix is coming, so permitting them only delays it
+        dead = re.search(r"discontinued|abandoned|unmaintained|no longer (?:maintained|developed)|end[ -]of[ -]life",
+                         " ".join(issues), re.I)
+        use, pset = pkg_use(flake, pname)
+
+        explain = f"nixpkgs refuses to build `{pkg}` without your permission, because it is marked insecure."
+        if issues:
+            explain += " The reason it gives:\n\n" + "\n".join(f"    - {i}" for i in issues) + "\n\n"
+        else:
+            explain += " "
+        if use:
+            rep.loc, rep.others, rep.context, rep.blame = use, [], "", "you"
+            explain += f"It's pulled in by {use.describe()}."
+        else:
+            explain += "Nothing in your files names it, so something you use depends on it."
+        permit = f'nixpkgs.config.permittedInsecurePackages = [ "{pkg}" ];'
+        if pset != "pkgs":
+            permit = f'config.permittedInsecurePackages = [ "{pkg}" ];  (in the `import` that makes `{pset}`)'
+
+        if dead and use:
+            fix = (f"It won't get fixes any more, so remove it from line {use.line} of {use.origin.display} "
+                   "and use a replacement.")
+        elif dead:
+            fix = "It won't get fixes any more. Find the package that depends on it and replace or remove that."
+        elif use:
+            fix = (f"Remove it from line {use.line} of {use.origin.display}, or wait for an update that fixes it "
+                   "(then update your flake).")
+        else:
+            fix = "Wait for an update that fixes it (then update your flake), or remove the package that depends on it."
+        fix += (f"\n\nTo use it anyway and accept the risk:\n    {permit}\n"
+                "That allows only this exact version. When it changes, the build stops again and the entry needs updating.")
         vars["explain_text"], vars["fix_text"] = explain, fix
 
 
@@ -1778,6 +1823,7 @@ let
         "missing_module": h_missing_module,
         "hm_file": h_hm_file,
         "unfree": h_unfree,
+        "insecure": h_insecure,
         "option_type": h_option_type,
         "unit": h_unit,
     }
@@ -2521,14 +2567,14 @@ let
     [[rule]]
     id = "insecure"
     title = "Package is marked insecure"
-    match = ''''Package [‘'](?P<pkg>[^’']+)[’'][^\n]*is marked as insecure''''
+    match = ''''(?:Refusing to evaluate package|Package) [‘'](?P<pkg>[^’']+)[’'][^\n]*is marked as insecure''''
     priority = 85
     blame = "upstream"
-    explain = "`{{pkg}}` has known security problems, so nixpkgs refuses to build it without your permission. Something you use depends on it."
-    fix = """
-    Prefer an alternative if there is one. To accept the risk:
-        nixpkgs.config.permittedInsecurePackages = [ "{{pkg}}" ];
-    """
+    # the handler quotes nixpkgs' "Known issues" (e.g. "discontinued upstream"), finds what pulls the package in
+    # (you if your files name it, else a dependency), and says the permit is tied to this exact version
+    handler = "insecure"
+    explain = "{{explain_text}}"
+    fix = "{{fix_text}}"
 
     [[rule]]
     id = "broken"
