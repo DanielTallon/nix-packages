@@ -4,7 +4,8 @@ Pick a NixOS generation, then **pin** it to keep it bootable, **prune** it
 if it's not currently in the boot menu, or **harvest** it to evict it from
 the boot menu and reclaim its `/boot` space immediately — plus a global
 **garbage-collect** action for orphaned `/boot` files and nix-shell/nix
-develop leftovers, and an in-place help panel — all from one scrollable
+develop leftovers, a **config** view of the commit and files each generation
+was built from, and an in-place help panel — all from one scrollable
 list. Plus a rescue tool for when `/boot` fills up and a normal rebuild
 can't even run.
 
@@ -92,14 +93,18 @@ boot-gardener --bootloader systemd-boot
 # Skip the YIELD column (faster startup)
 boot-gardener --no-yield
 
+# Diff 'c' configs against a specific working folder
+boot-gardener --config-dir ~/.dotfiles
+
 # Swap in your own colors, or turn custom colors off
 BOOT_GARDENER_COLORS=dark boot-gardener
 NO_COLOR=1 boot-gardener
 ```
 
-The list shows generation number, date, NixOS/kernel version, and a `BOOT`
-column marking which generations are currently referenced in your boot
-menu (reading `/boot/limine/limine.conf` on Limine, `/boot/loader/entries/`
+The list shows generation number, date, the commit it was built from
+(`REV`, see [below](#looking-at-a-generations-config)), NixOS/kernel
+version, and a `BOOT` column marking which generations are currently
+referenced in your boot menu (reading `/boot/limine/limine.conf` on Limine, `/boot/loader/entries/`
 on systemd-boot, or `/boot/grub/grub.cfg` on GRUB — all need `sudo` to
 read; you'll be prompted once, up front). A second header line shows
 `/boot`'s used/free space and percent-full (`df -h /boot`, no `sudo`
@@ -191,6 +196,9 @@ the garden. `--no-yield` skips the measuring entirely and the column shows
   then `nix-collect-garbage` runs. It never deletes a generation from the
   system profile itself and never touches the boot-menu config directly —
   that's what `h` is for.
+- **`c`** opens the **config** a generation (or 📌 pin) was built from — see
+  [Looking at a generation's config](#looking-at-a-generations-config).
+  Tab-mark two rows first to diff their configs instead.
 - **`?`** toggles an in-place help panel listing all of the above, without
   leaving the list.
 - **`q`** or **Esc** at the list quits the tool entirely, as does Ctrl-C at
@@ -204,6 +212,55 @@ the garden. `--no-yield` skips the measuring entirely and the column shows
   Without it, a message that doesn't already end on its own confirmation
   prompt would get wiped off the terminal by the next redraw before
   there's any real chance to read it.
+
+### Looking at a generation's config
+
+Rolling back a generation brings back the system it built, but not the
+config files you built it from. You also can't tell from the boot menu which
+commit a generation came from. Two lines in your NixOS config make each
+generation keep both, with no network needed to get them back:
+
+```nix
+# In a module that has your flake's `self` (e.g. via specialArgs/inputs.self)
+system.configurationRevision = self.rev or self.dirtyRev or "unknown";
+environment.etc."nixos-config-source".source = self;
+```
+
+The first records the commit. The second puts a read-only copy of your
+flake's git-tracked files inside the generation, at
+`/etc/nixos-config-source` while it's running. Only generations built after
+you add them have either; older ones show `-` and `c` explains what to add.
+
+With those in place:
+
+- The **`REV`** column shows each generation's commit: `5d44a72`, or
+  `5d44a72*` if it was built with uncommitted changes (the copy still holds
+  exactly what was built), or `-` if it didn't record one.
+- **`c`** on one row opens a file list of that generation's config, with a
+  preview:
+  - **Enter** views the marked file(s) in `less`.
+  - **Ctrl-D** diffs them against the running generation's copy.
+  - **Ctrl-W** diffs them against your working config folder (`--config-dir
+    DIR`, or the folder in `NH_OS_FLAKE` / `NH_FLAKE`). Files only in your
+    working folder show as `Only in ...`; they may just be untracked.
+  - **Ctrl-S** copies them to a folder you name, defaulting to
+    `./config-generation-N`. Copies are writable. It never replaces a file
+    that's already there, and copying the whole thing needs a folder that
+    doesn't exist yet.
+  - The **`[all files]`** row at the top makes any of these apply to the
+    whole copy.
+  - **Esc** goes back to the generation list.
+- **`c`** on two Tab-marked rows diffs their whole configs, older first. If
+  both were built from clean commits it also prints the matching `git diff`.
+
+A pin keeps its generation's copy too: the pinned `init` lives inside that
+generation's system build, so the whole build, config copy included, stays
+around after the generation itself is pruned.
+
+This never edits your working config or runs `git`. To go back to an older
+config, either `git checkout` the commit from `REV` or copy files out with
+Ctrl-S and review them yourself. Use `--config-source NAME` if you put the
+copy under a different `/etc` name.
 
 ### Appearance
 

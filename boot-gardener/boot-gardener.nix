@@ -20,7 +20,7 @@
 #                                          generation" messages use it)
 # Everything else (including a bare $VAR) is literal.
 
-{ lib, stdenvNoCC, makeWrapper, writeText, jq, fzf, coreutils, gnused, gawk, util-linux, findutils
+{ lib, stdenvNoCC, makeWrapper, writeText, jq, fzf, coreutils, gnused, gawk, util-linux, findutils, diffutils, less
 }:
 
 let
@@ -78,6 +78,11 @@ let
     # stray build results. None of the three touch the generation list itself
     # or any file this tool doesn't already document.
     #
+    # 'c' (config) only reads: each generation's recorded commit and the copy
+    # of its config under <toplevel>/etc/nixos-config-source. Its one write is
+    # copying files out to a folder the user types in, never over an existing
+    # file.
+    #
     # Bootloader (Limine, systemd-boot, or GRUB) is auto-detected from what's
     # on /boot; pass --bootloader to override. 'p'/'h'/'g' work the same on
     # all three. Pinning ('Enter') is Limine-only for now — it writes Nix-level
@@ -91,6 +96,9 @@ let
     REMOVE_NAME=""
     BOOTLOADER_OVERRIDE=""
     YIELD_ENABLED=1
+    CONFIG_SOURCE="nixos-config-source"
+    CONFIG_DIR=""
+    PAUSE_AFTER_CONFIG=1
 
     SELF="$(readlink -f "''${BASH_SOURCE[0]}")"
     RESCUE_SCRIPT="$(dirname "$SELF")/rescue.sh"
@@ -108,6 +116,9 @@ let
                                          non-bootloader generation; 'h' to
                                          harvest a bootloader generation (Tab
                                          to select several first for 'p'/'h');
+                                         'c' to browse, diff, or copy the
+                                         config a generation was built from
+                                         (two rows: diff them);
                                          'g' to garbage-collect (no selection
                                          needed); '?' to toggle this help
       boot-gardener --list               List currently pinned entries
@@ -117,6 +128,12 @@ let
                                          Skip auto-detection and use this backend
       boot-gardener --no-yield           Don't compute the YIELD column (faster
                                          startup; the column shows '?')
+      boot-gardener --config-source NAME The /etc name each generation's config
+                                         copy is under (default:
+                                         nixos-config-source)
+      boot-gardener --config-dir DIR     Working config folder for 'c' diffs
+                                         (default: the folder in NH_OS_FLAKE or
+                                         NH_FLAKE)
       boot-gardener --help               Show this help
 
     Environment:
@@ -345,6 +362,14 @@ let
           YIELD_ENABLED=0
           shift
           ;;
+        --config-source)
+          CONFIG_SOURCE="''${2:-}"
+          shift 2
+          ;;
+        --config-dir)
+          CONFIG_DIR="''${2:-}"
+          shift 2
+          ;;
         --help | -h)
           usage
           exit 0
@@ -433,7 +458,20 @@ let
                stray build results, and anything freed up by a prior 'p'.
                Never touches the system profile or the boot menu config.
 
+      c        Config. On one row (generation or 📌 pin): browse the copy of
+               the config that built it -- Enter views a file, Ctrl-D diffs
+               it against the running generation's copy, Ctrl-W against your
+               working config folder, Ctrl-S copies it out to a folder you
+               name (never replacing a file already there). The
+               "[all files]" row does any of those for the whole copy. On
+               two Tab-marked rows: diff their configs. Read-only apart
+               from copying out. Needs the two lines in the README (only
+               generations built after adding them have a copy).
+
       ?        Toggle this help.
+
+      REV      (column) Commit the generation was built from; '*' means it
+               had uncommitted changes, '-' means it didn't record one.
 
       YIELD    (column) Roughly how much Nix store space removing that
                generation would free: the paths nothing else on the system
@@ -751,6 +789,327 @@ let
       fi
     }
 
+    # --- Config snapshots ('c') --------------------------------------------------
+    # A generation can carry two opt-in records of the config that built it,
+    # both set in the user's own NixOS config (see the README):
+    #   - system.configurationRevision: the commit, read back with that
+    #     generation's own 'nixos-version --configuration-revision';
+    #   - environment.etc."$CONFIG_SOURCE".source = self: a read-only copy of
+    #     the flake's git-tracked files, at <toplevel>/etc/$CONFIG_SOURCE.
+    # Everything here only reads them. The one write is 'copy', which copies
+    # into a folder the user types in and never replaces a file that's
+    # already there.
+    ALL_FILES="[all files]"
+    declare -A REV_CACHE=()
+
+    # Short commit a toplevel was built from ("5d44a72", or "5d44a72*" if the
+    # tree had uncommitted changes), or "-" if it didn't record one. Cached by
+    # toplevel, which is immutable -- call cache_revision outside a $(...) so
+    # the cache survives; gen_revision is the print-it form for one-offs.
+    cache_revision() {
+      local top="$1" rev="" dirty=""
+      if [[ -z "''${REV_CACHE[$top]:-}" ]]; then
+        if [[ -x "$top/sw/bin/nixos-version" ]]; then
+          rev=$("$top/sw/bin/nixos-version" --configuration-revision 2>/dev/null) || rev=""
+        fi
+        if [[ "$rev" == *-dirty ]]; then
+          rev="''${rev%-dirty}"
+          dirty="*"
+        fi
+        if [[ -z "$rev" ]]; then
+          REV_CACHE[$top]="-"
+        else
+          REV_CACHE[$top]="''${rev:0:7}$dirty"
+        fi
+      fi
+    }
+
+    gen_revision() {
+      cache_revision "$1"
+      printf '%s' "''${REV_CACHE[$1]}"
+    }
+
+    # Full commit, or nothing for dirty/missing ones -- used for the git hint.
+    gen_full_revision() {
+      local rev=""
+      [[ -x "$1/sw/bin/nixos-version" ]] &&
+        rev=$("$1/sw/bin/nixos-version" --configuration-revision 2>/dev/null) || true
+      [[ -n "$rev" && "$rev" != *-dirty && "$rev" != unknown ]] && printf '%s' "$rev"
+      return 0
+    }
+
+    # Toplevel store path behind a list row: a generation number, or a
+    # "pin:NAME" row. A pin's init script is a file inside its generation's
+    # toplevel, so the pin keeps that toplevel -- and its snapshot -- alive
+    # even after the generation itself is pruned.
+    row_toplevel() {
+      local id="$1" init top
+      if [[ "$id" == pin:* ]]; then
+        init=$(jq -r --arg name "''${id#pin:}" '.[] | select(.name == $name) | .init' "$OUTPUT" 2>/dev/null) || return 1
+        [[ -n "$init" ]] || return 1
+        top=$(dirname "$init")
+      else
+        top=$(readlink -f "/nix/var/nix/profiles/system-''${id}-link" 2>/dev/null) || return 1
+      fi
+      [[ -e "$top/nixos-version" ]] || return 1
+      printf '%s' "$top"
+    }
+
+    row_label() {
+      if [[ "$1" == pin:* ]]; then
+        printf 'pin %s' "''${1#pin:}"
+      else
+        printf 'generation %s' "$1"
+      fi
+    }
+
+    no_snapshot_msg() {
+      echo
+      echo "$1 has no config snapshot (nothing at <its system>/etc/$CONFIG_SOURCE)." >&2
+      echo "Only generations built after adding these two lines to your NixOS" >&2
+      echo "config have one (self is your flake's own 'self' input):" >&2
+      echo >&2
+      echo '    system.configurationRevision = self.rev or self.dirtyRev or "unknown";' >&2
+      echo "    environment.etc.\"$CONFIG_SOURCE\".source = self;" >&2
+      echo >&2
+      echo "Use --config-source NAME if yours is under a different /etc name." >&2
+    }
+
+    # The config folder you edit and rebuild from: --config-dir, else the
+    # folder part of NH_OS_FLAKE / NH_FLAKE. Prints nothing (status 1) if
+    # neither names an existing folder.
+    working_config_dir() {
+      local f
+      if [[ -n "$CONFIG_DIR" ]]; then
+        f="$CONFIG_DIR"
+      else
+        f="''${NH_OS_FLAKE:-''${NH_FLAKE:-}}"
+        f="''${f%%#*}"
+        f="''${f#path:}"
+        f="''${f#git+file://}"
+      fi
+      [[ -n "$f" && -d "$f" ]] || return 1
+      readlink -f "$f"
+    }
+
+    # Pages a recursive diff of two files or folders. --no-dereference so a
+    # 'result' link in a working copy is compared as a link, not walked into
+    # its whole system closure. Files that exist on only one side show as
+    # "Only in ..." -- in a working copy those may just be untracked.
+    show_diff() {
+      local a="$1" b="$2" title="$3"
+      if [[ ! -e "$a" || ! -e "$b" ]]; then
+        echo
+        [[ -e "$a" ]] || echo "Not in the first one: $a"
+        [[ -e "$b" ]] || echo "Not in the second one: $b"
+        return 0
+      fi
+      a=$(readlink -f "$a")
+      b=$(readlink -f "$b")
+      if diff -rq --no-dereference -x .git "$a" "$b" >/dev/null 2>&1; then
+        echo
+        echo "$title"
+        echo "No differences."
+        return 0
+      fi
+      {
+        printf '%s\n' "$title"
+        printf -- '--- %s\n+++ %s\n\n' "$a" "$b"
+        diff -ru --no-dereference -x .git --color=always "$a" "$b" || true
+      } | less -R || true
+      # Returning straight to fzf would hide where you were; nothing to pause on.
+      PAUSE_AFTER_CONFIG=0
+    }
+
+    # Copies FILE(s) (relative to SRC), or the whole snapshot, into a folder
+    # you type in. Copies are made writable. Never replaces an existing file.
+    copy_from_snapshot() {
+      local src="$1" default_dest="$2"
+      shift 2
+      local dest f n=0 skipped=0
+      prompt "Copy to folder (press enter for: $default_dest) [q to cancel]: " "$default_dest" dest ||
+        { echo "Cancelled. Nothing was copied."; return 1; }
+      dest="''${dest/#\~/$HOME}"
+
+      if [[ "$1" == "$ALL_FILES" ]]; then
+        if [[ -e "$dest" ]]; then
+          echo "$dest already exists -- refusing to copy the whole snapshot into it." >&2
+          echo "Pick a folder that doesn't exist yet." >&2
+          return 1
+        fi
+        mkdir -p "$dest"
+        cp -r --no-preserve=mode,ownership "$src/." "$dest"
+        chmod -R u+w "$dest"
+        echo "Copied the whole snapshot to $dest."
+        return 0
+      fi
+
+      for f in "$@"; do
+        if [[ -e "$dest/$f" || -L "$dest/$f" ]]; then
+          echo "Skipped $f: $dest/$f already exists." >&2
+          skipped=$((skipped + 1))
+          continue
+        fi
+        mkdir -p "$(dirname "$dest/$f")"
+        cp -P --no-preserve=mode,ownership "$src/$f" "$dest/$f"
+        [[ -L "$dest/$f" ]] || chmod u+w "$dest/$f"
+        n=$((n + 1))
+      done
+      if [[ "$skipped" -gt 0 ]]; then
+        echo "Copied $n file(s) to $dest ($skipped skipped)."
+      else
+        echo "Copied $n file(s) to $dest."
+      fi
+    }
+
+    # 'c' on one row: browse that generation's snapshot. Enter views,
+    # Ctrl-D diffs against the running generation's snapshot, Ctrl-W against
+    # your working config folder, Ctrl-S copies out. The "[all files]" row
+    # makes any of those apply to the whole snapshot.
+    browse_config() {
+      local id="$1" top src label rev running running_src wd summary raw key
+      local -a picked
+      label=$(row_label "$id")
+      if ! top=$(row_toplevel "$id"); then
+        echo
+        echo "Can't find the system build for $label -- it may have been garbage-collected." >&2
+        return 1
+      fi
+      src="$top/etc/$CONFIG_SOURCE"
+      if [[ ! -d "$src" ]]; then
+        no_snapshot_msg "''${label^}"
+        return 1
+      fi
+      src=$(readlink -f "$src")
+      rev=$(gen_revision "$top")
+      running=$(readlink -f /run/current-system 2>/dev/null || true)
+      running_src="$running/etc/$CONFIG_SOURCE"
+      wd=$(working_config_dir) || wd=""
+
+      summary="$YIELD_DIR/config-summary"
+      {
+        echo "Config snapshot of $label"
+        echo
+        if [[ "$rev" == "-" ]]; then
+          echo "  commit:   none recorded (system.configurationRevision not set)"
+        else
+          echo "  commit:   $rev"
+        fi
+        echo "  snapshot: $src"
+        echo "  files:    $(find "$src" -type f -o -type l | wc -l)"
+        echo
+        echo "Pick this row to view, diff, or copy the whole snapshot."
+        echo "A '*' after the commit means it was built with uncommitted changes;"
+        echo "the snapshot still holds exactly the files it was built from."
+      } >"$summary"
+
+      PAUSE_AFTER_CONFIG=1
+      while true; do
+        raw=$(
+          cd "$src" && {
+            printf '%s\n' "$ALL_FILES"
+            find . \( -type f -o -type l \) -printf '%P\n' | sort
+          } | SHELL="$(command -v bash)" fzf --style full \
+            --layout reverse \
+            --header "Config of $label -- commit $rev"$'\n'"Working copy: ''${wd:-(none found -- pass --config-dir)}" \
+            --border-label " 🌱 Config: $label " \
+            "''${FZF_THEME_ARGS[@]}" \
+            --footer "  Esc:back   Enter:view   Ctrl-S:copy   Tab:mark"$'\n'"  Ctrl-D:diff vs running   Ctrl-W:diff vs working" \
+            --multi \
+            --preview "if [ {} = '$ALL_FILES' ]; then cat '$summary'; else cat -- {}; fi" \
+            --preview-window 'right,60%,wrap' \
+            --expect=ctrl-d,ctrl-w,ctrl-s
+        ) || return 0
+
+        key=$(head -n1 <<<"$raw")
+        mapfile -t picked < <(tail -n +2 <<<"$raw")
+        [[ ''${#picked[@]} -gt 0 ]] || continue
+        # "[all files]" anywhere in the selection means the whole snapshot.
+        local p
+        for p in "''${picked[@]}"; do
+          [[ "$p" == "$ALL_FILES" ]] && picked=("$ALL_FILES") && break
+        done
+
+        case "$key" in
+          ctrl-d)
+            if [[ "$top" == "$running" ]]; then
+              echo
+              echo "$label is the running generation -- nothing to compare against."
+              pause_after_action
+            elif [[ ! -d "$running_src" ]]; then
+              no_snapshot_msg "The running generation"
+              pause_after_action
+            else
+              for p in "''${picked[@]}"; do
+                [[ "$p" == "$ALL_FILES" ]] && p=""
+                show_diff "$src/$p" "$running_src/$p" \
+                  "Config diff: $label ($rev) -> running generation ($(gen_revision "$running"))''${p:+ -- $p}"
+              done
+              [[ "$PAUSE_AFTER_CONFIG" -eq 1 ]] && pause_after_action
+            fi
+            ;;
+          ctrl-w)
+            if [[ -z "$wd" ]]; then
+              echo
+              echo "No working config folder found. Pass --config-dir DIR, or set" >&2
+              echo "NH_OS_FLAKE / NH_FLAKE to it." >&2
+              pause_after_action
+            else
+              for p in "''${picked[@]}"; do
+                [[ "$p" == "$ALL_FILES" ]] && p=""
+                show_diff "$src/$p" "$wd/$p" \
+                  "Config diff: $label ($rev) -> working copy $wd''${p:+ -- $p}"
+              done
+              [[ "$PAUSE_AFTER_CONFIG" -eq 1 ]] && pause_after_action
+            fi
+            ;;
+          ctrl-s)
+            echo
+            copy_from_snapshot "$src" "$PWD/config-''${label// /-}" "''${picked[@]}" || true
+            pause_after_action
+            ;;
+          *)
+            if [[ "''${picked[0]}" == "$ALL_FILES" ]]; then
+              less -- "$summary" || true
+            else
+              less -- "''${picked[@]/#/$src/}" || true
+            fi
+            ;;
+        esac
+        PAUSE_AFTER_CONFIG=1
+      done
+    }
+
+    # 'c' on two rows: diff their whole snapshots, older one first.
+    diff_two_configs() {
+      local a="$1" b="$2" top_a top_b la lb ra rb fa fb
+      if [[ "$a" != pin:* && "$b" != pin:* && "$a" -gt "$b" ]]; then
+        local t="$a"; a="$b"; b="$t"
+      fi
+      la=$(row_label "$a")
+      lb=$(row_label "$b")
+      top_a=$(row_toplevel "$a") || { echo; echo "Can't find the system build for $la." >&2; return 1; }
+      top_b=$(row_toplevel "$b") || { echo; echo "Can't find the system build for $lb." >&2; return 1; }
+      [[ -d "$top_a/etc/$CONFIG_SOURCE" ]] || { no_snapshot_msg "''${la^}"; return 1; }
+      [[ -d "$top_b/etc/$CONFIG_SOURCE" ]] || { no_snapshot_msg "''${lb^}"; return 1; }
+      ra=$(gen_revision "$top_a")
+      rb=$(gen_revision "$top_b")
+      PAUSE_AFTER_CONFIG=1
+      show_diff "$top_a/etc/$CONFIG_SOURCE" "$top_b/etc/$CONFIG_SOURCE" \
+        "Config diff: $la ($ra) -> $lb ($rb)"
+      fa=$(gen_full_revision "$top_a")
+      fb=$(gen_full_revision "$top_b")
+      if [[ -n "$fa" && -n "$fb" && "$fa" != "$fb" ]]; then
+        echo
+        echo "Both were built from clean commits, so git has the same diff:"
+        echo "    git diff ''${fa:0:12} ''${fb:0:12}"
+      fi
+      if [[ "$PAUSE_AFTER_CONFIG" -eq 1 || ( -n "$fa" && -n "$fb" ) ]]; then
+        pause_after_action
+      fi
+      return 0
+    }
+
     # Human-readable byte count, binary units (matches the README's GiB figures).
     fmt_bytes() {
       awk -v b="$1" 'BEGIN {
@@ -862,7 +1221,16 @@ let
     # Main loop: redisplay the generation picker after every completed or
     # cancelled action, so only 'q'/Esc *at the list itself* (or Ctrl-C, any
     # time) actually exits the tool.
+    FIRST_DRAW=1
     while true; do
+      # Redraws re-read the boot menu and re-measure YIELD, which takes a few
+      # seconds with nothing else on screen -- say so, or it looks frozen.
+      if [[ "$FIRST_DRAW" -eq 0 && -t 1 ]]; then
+        echo
+        echo "Refreshing the list..."
+      fi
+      FIRST_DRAW=0
+
       # Booted vs. running vs. profile-head generation -- see
       # resolve_running_generations in boot-backend.sh. They're normally the
       # same number, but after a rebuild dies with ENOSPC on a full /boot, the
@@ -958,7 +1326,10 @@ let
         yield_str="?"
         [[ "$YIELD_OK" -eq 1 && -n "''${YIELD[$gen]:-}" ]] && yield_str=$(fmt_bytes "''${YIELD[$gen]}")
 
-        ROWS+=("''${gen}"$'\t'"''${boot_marker}"$'\t'"''${yield_str}"$'\t'"''${gen_date}"$'\t'"''${nixos_ver}"$'\t'"''${kernel_ver}''${marker}")
+        cache_revision "$target"
+        rev_str="''${REV_CACHE[$target]}"
+
+        ROWS+=("''${gen}"$'\t'"''${boot_marker}"$'\t'"''${yield_str}"$'\t'"''${gen_date}"$'\t'"''${rev_str}"$'\t'"''${nixos_ver}"$'\t'"''${kernel_ver}''${marker}")
       done
 
       # Pins are captured store paths, decoupled from the system profile on
@@ -976,7 +1347,13 @@ let
           [[ -n "$pname" ]] || continue
           pdate=$(grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' <<<"$ptitle" | head -n1)
           [[ -n "$pdate" ]] || pdate="-"
-          PIN_ROWS+=("pin:''${pname}"$'\t'''📌'$'\t'''-'$'\t'"''${pdate}"$'\t'''-'$'\t'"pinned: ''${pname}")
+          # A pin's toplevel survives its generation, so its commit does too.
+          prev_str="-"
+          if ptop=$(row_toplevel "pin:''${pname}"); then
+            cache_revision "$ptop"
+            prev_str="''${REV_CACHE[$ptop]}"
+          fi
+          PIN_ROWS+=("pin:''${pname}"$'\t'''📌'$'\t'''-'$'\t'"''${pdate}"$'\t'"''${prev_str}"$'\t'''-'$'\t'"pinned: ''${pname}")
         done < <(jq -r '.[] | "\(.name)\t\(.title)"' "$OUTPUT")
       fi
 
@@ -1013,11 +1390,11 @@ let
       fi
       ENTER_LABEL="Enter:pin/unpin"
       backend_supports_pin || ENTER_LABEL="Enter:pin(Limine only)"
-      FOOTER_TEXT="  q/Esc:quit   ''${ENTER_LABEL}   Tab:multi-select   p:prune   h:harvest   g:gc   ?:help   ↑↓:move   Type to filter  "
+      FOOTER_TEXT="  q/Esc:quit   ''${ENTER_LABEL}   Tab:multi-select   p:prune   h:harvest   c:config   g:gc   ?:help   ↑↓:move   Type to filter  "
 
       RAW=$(
         {
-          printf 'GEN\tBOOT\tYIELD\tBUILT\tNIXOS VERSION\tKERNEL\n'
+          printf 'GEN\tBOOT\tYIELD\tBUILT\tREV\tNIXOS VERSION\tKERNEL\n'
           printf '%s\n' "$BODY"
         } | column -t -s $'\t' -R 3 |
           fzf --style full \
@@ -1033,7 +1410,7 @@ let
             --bind '?:toggle-preview' \
             --preview "cat '$HELP_FILE'" \
             --preview-window '~3,down,70%:hidden:wrap' \
-            --expect=p,g,h
+            --expect=p,g,h,c
       ) || true
 
       KEY=$(head -n1 <<<"$RAW")
@@ -1071,6 +1448,22 @@ let
           prune_generation "$GEN" || true
           pause_after_action
         done
+        continue
+      fi
+
+      if [[ "$KEY" == "c" ]]; then
+        # One row: browse its config snapshot. Two: diff them. Both pause on
+        # their own when there's something left on screen to read.
+        case ''${#SELECTED_GENS[@]} in
+          1) browse_config "''${SELECTED_GENS[0]}" || pause_after_action ;;
+          2) diff_two_configs "''${SELECTED_GENS[0]}" "''${SELECTED_GENS[1]}" || pause_after_action ;;
+          *)
+            echo
+            echo "'c' takes one row (browse its config) or two (diff them) --" >&2
+            echo "you selected ''${#SELECTED_GENS[@]}." >&2
+            pause_after_action
+            ;;
+        esac
         continue
       fi
 
@@ -1471,6 +1864,15 @@ let
     # Phase 2 apply: edit the boot menu for real, with a backup and validation
     # gate before the write, then delete the files that edit orphans.
     # ---------------------------------------------------------------------------
+    # Green-yellow highlight for the apply summary's delete step and the
+    # generation-number prompt. Off for NO_COLOR or when the output isn't a
+    # terminal.
+    APPLY_HIGHLIGHT="" APPLY_RESET=""
+    if [[ -z "''${NO_COLOR:-}" && -t 1 ]]; then
+      APPLY_HIGHLIGHT=$'\033[38;2;173;255;47m'
+      APPLY_RESET=$'\033[0m'
+    fi
+
     echo "APPLY MODE: this will:"
     STEP=1
     if [[ "$ORPHAN_COUNT" -gt 0 ]]; then
@@ -1483,12 +1885,12 @@ let
     STEP=$((STEP + 1))
     echo "  $STEP. Remove generation $EVICT_GEN's entry shown above from $BOOT_CONF_DISPLAY"
     STEP=$((STEP + 1))
-    echo "  $STEP. Delete the $NEWLY_ORPHANED_COUNT newly-orphaned file(s) above ($((NEWLY_ORPHANED_BYTES / 1024 / 1024)) MiB)"
+    echo "  $STEP. ''${APPLY_HIGHLIGHT}Delete the $NEWLY_ORPHANED_COUNT newly-orphaned file(s) above (recover $((NEWLY_ORPHANED_BYTES / 1024 / 1024)) MiB)''${APPLY_RESET}"
     STEP=$((STEP + 1))
     echo "  $STEP. Run: nix-env --delete-generations $EVICT_GEN --profile /nix/var/nix/profiles/system"
     echo
     echo "Generation $EVICT_GEN's boot menu entry cannot be recovered after this except from the backup."
-    confirm_exact "Type the generation number ($EVICT_GEN) to confirm, or 'q' to cancel: " "$EVICT_GEN"
+    confirm_exact "''${APPLY_HIGHLIGHT}Type the generation number ($EVICT_GEN) to confirm, or 'q' to cancel:''${APPLY_RESET} " "$EVICT_GEN"
     confirm_exact "Type 'yes' to proceed, or 'q' to cancel: " "yes"
     echo
 
@@ -2323,7 +2725,7 @@ let
 in
 stdenvNoCC.mkDerivation {
   pname = "boot-gardener";
-  version = "2.7.0";
+  version = "2.8.0";
 
   dontUnpack = true;
   dontBuild = true;
@@ -2340,13 +2742,13 @@ stdenvNoCC.mkDerivation {
     install -m755 ${dispatcher} $out/bin/boot-gardener
 
     wrapProgram $out/bin/boot-gardener \
-      --prefix PATH : ${lib.makeBinPath [ jq fzf coreutils gnused gawk util-linux findutils ]}
+      --prefix PATH : ${lib.makeBinPath [ jq fzf coreutils gnused gawk util-linux findutils diffutils less ]}
 
     runHook postInstall
   '';
 
   meta = with lib; {
-    description = "Pick, pin, prune, harvest, or garbage-collect NixOS generations in your Limine, systemd-boot, or GRUB boot menu, or rescue a full /boot partition";
+    description = "Pick, pin, prune, harvest, or garbage-collect NixOS generations in your Limine, systemd-boot, or GRUB boot menu, browse the config each was built from, or rescue a full /boot partition";
     platforms = platforms.linux;
     mainProgram = "boot-gardener";
   };
