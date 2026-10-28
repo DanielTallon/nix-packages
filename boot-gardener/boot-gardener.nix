@@ -1065,7 +1065,10 @@ let
             ;;
           ctrl-s)
             echo
-            copy_from_snapshot "$src" "$PWD/config-''${label// /-}" "''${picked[@]}" || true
+            # Default to $HOME, not $PWD: the tool is usually run from the
+            # config repo (for the pins file), and a copy there would land
+            # inside the repo.
+            copy_from_snapshot "$src" "$HOME/config-''${label// /-}" "''${picked[@]}" || true
             pause_after_action
             ;;
           *)

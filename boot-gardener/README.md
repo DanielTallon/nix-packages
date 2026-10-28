@@ -244,7 +244,9 @@ With those in place:
     DIR`, or the folder in `NH_OS_FLAKE` / `NH_FLAKE`). Files only in your
     working folder show as `Only in ...`; they may just be untracked.
   - **Ctrl-S** copies them to a folder you name, defaulting to
-    `./config-generation-N`. Copies are writable. It never replaces a file
+    `~/config-generation-N` (your home folder, not the folder you ran it
+    from, so a copy never lands inside your config repo). Copies are
+    writable. It never replaces a file
     that's already there, and copying the whole thing needs a folder that
     doesn't exist yet.
   - The **`[all files]`** row at the top makes any of these apply to the
