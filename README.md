@@ -266,8 +266,9 @@ Wineland 11.0-20260930 and newer restores DLSS, frame generation, ray tracing an
 ### On the web (any computer, including Windows)
 
 Open **<https://danieltallon.github.io/nix-packages/photo2scan/>**, click
-**Choose photos…**, drag any orange corner the page finder got wrong, and click
-**Save PDF**. Everything runs in the browser; photos are never uploaded. It is
+**Choose photos…**, drag any blue corner the page finder got wrong, set the look (gray, black and
+white or color, plus **Lighter / darker** and **Contrast** sliders, like a
+scanner's; double-click a slider to reset it), and click **Save PDF**. Everything runs in the browser; photos are never uploaded. It is
 one self-contained file, [`photo2scan/web/index.html`](./photo2scan/web/index.html),
 with no libraries, so it also works opened straight from disk with no internet.
 Browsers other than Safari can't open HEIC photos; JPEG and PNG work everywhere.

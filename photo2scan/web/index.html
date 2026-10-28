@@ -15,7 +15,7 @@
     --accent: #2563c9;
     --accent-text: #ffffff;
     --danger: #b3261e;
-    --handle: #e8590c;
+    --handle: #1a8cff;
     color-scheme: light;
   }
   @media (prefers-color-scheme: dark) {
@@ -28,7 +28,7 @@
       --accent: #5b8def;
       --accent-text: #0e1216;
       --danger: #f2827a;
-      --handle: #ff8a3d;
+      --handle: #3da5ff;
       color-scheme: dark;
     }
   }
@@ -53,6 +53,9 @@
     border: 1px solid var(--border); border-radius: 7px; padding: 7px 10px;
   }
   input[type=text] { width: 12em; }
+  input[type=range] { width: 9em; accent-color: var(--accent); margin: 8px 0; }
+  .toolbar label output { color: var(--text); font-variant-numeric: tabular-nums; }
+  label.off { opacity: 0.5; }
   button { cursor: pointer; }
   button:disabled { opacity: 0.5; cursor: default; }
   button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
@@ -96,6 +99,14 @@
         <option value="color">Color</option>
       </select>
     </label>
+    <label title="Double-click to reset">
+      <span>Lighter / darker <output id="dark-value">0</output></span>
+      <input id="dark" type="range" min="-50" max="50" step="1" value="0">
+    </label>
+    <label id="contrast-label" title="Double-click to reset">
+      <span>Contrast <output id="contrast-value">0</output></span>
+      <input id="contrast" type="range" min="-50" max="50" step="1" value="0">
+    </label>
     <label>Paper
       <select id="paper">
         <option value="letter">US Letter</option>
@@ -114,7 +125,7 @@
     Pages appear in the order you add them; use the arrows to reorder.</div>
   <div id="pages"></div>
 
-  <footer>Drag the orange corners if a page's outline is off. The result updates when you let go.</footer>
+  <footer>Drag the blue corners if a page's outline is off. The result updates when you let go.</footer>
 </main>
 
 <script>
@@ -416,8 +427,19 @@ function background(chan, w, h, f) {
   return resize(boxBlur(small, bw, bh, 3, 3), bw, bh, w, h);
 }
 
-function clean(img, mode) {
+// Scanner-style adjustments for gray and color: `dark` (-50..50) bends the
+// midtones darker or lighter while paper white stays white, and `contrast`
+// (-50..50) spreads tones apart from (or toward) middle gray.
+function toneCurve(dark, contrast) {
+  const gamma = 2 ** (dark / 50), gain = 2 ** (contrast / 50);
+  return Float32Array.from({ length: 256 }, (_, v) =>
+    Math.max(0, Math.min(255, (255 * (v / 255) ** gamma - 128) * gain + 128)));
+}
+
+function clean(img, { mode, dark, contrast }) {
   const { width: w, height: h, data: d } = img, n = w * h;
+  const curve = toneCurve(dark, contrast);
+  const tone = v => curve[Math.max(0, Math.min(255, Math.round(v)))];
   const k = w / 2500;                       // tuned on ~2500 px wide pages
   const f = Math.max(2, Math.round(8 * k));
 
@@ -426,7 +448,7 @@ function clean(img, mode) {
       const c = new Float32Array(n);
       for (let i = 0; i < n; i++) c[i] = d[4 * i + ch];
       const bg = background(c, w, h, f);
-      for (let i = 0; i < n; i++) d[4 * i + ch] = Math.min(255, c[i] * 255 / Math.max(1, bg[i]));
+      for (let i = 0; i < n; i++) d[4 * i + ch] = tone(Math.min(255, c[i] * 255 / Math.max(1, bg[i])));
     }
     return img;
   }
@@ -445,11 +467,14 @@ function clean(img, mode) {
     // measured over a wide area, so shadows across the page don't count.
     const sw = 200, sh = Math.max(1, Math.round(200 * h / w));
     const paper = resize(median(resize(gray, w, h, sw, sh), sw, sh, 10), sw, sh, w, h);
+    // Darker means a lower bar for calling a pixel ink (contrast has no
+    // meaning with only black and white).
+    const margin = 15 - dark * 0.25, fill = 0.55 + dark * 0.003;
     out = new Float32Array(n);
     for (let i = 0; i < n; i++)
-      out[i] = flat[i] > mean[i] - 15 && gray[i] >= paper[i] * 0.55 ? 255 : 0;
+      out[i] = flat[i] > mean[i] - margin && gray[i] >= paper[i] * fill ? 255 : 0;
   } else {
-    out = flat.map(v => Math.max(0, Math.min(255, v * 1.15 - 30)));
+    out = flat.map(v => tone(v * 1.15 - 30));
   }
   for (let i = 0; i < n; i++) d[4 * i] = d[4 * i + 1] = d[4 * i + 2] = out[i];
   return img;
@@ -467,14 +492,15 @@ function sourcePixels(bitmap, maxSide) {
 }
 
 // Render a page with the given source resolution and output long-side cap.
-function renderPage(page, mode, srcMax, outMax) {
+// `look` is { mode, dark, contrast } as passed to clean().
+function renderPage(page, look, srcMax, outMax) {
   const src = page.cache && page.cache.max === srcMax ? page.cache : sourcePixels(page.bitmap, srcMax);
   if (srcMax <= 1200) page.cache = Object.assign(src, { max: srcMax });  // keep the preview source
   const corners = page.corners.map(([x, y]) => [x * src.s, y * src.s]);
   let [w, h] = pageSize(corners);
   const fit = Math.min(1, outMax / Math.max(w, h));
   w = Math.max(1, Math.round(w * fit)); h = Math.max(1, Math.round(h * fit));
-  return clean(warp(src.data, src.w, src.h, corners, w, h), mode);
+  return clean(warp(src.data, src.w, src.h, corners, w, h), look);
 }
 
 // ---------- PDF writing (JPEG pages, no libraries) ----------
@@ -561,7 +587,7 @@ function buildCard(page) {
       <button data-act="reset" title="Go back to the detected corners">Reset corners</button>
       <button data-act="remove">Remove</button>
     </div>
-    <div class="note" hidden>Couldn't find the page edges. Drag the orange corners onto the page's corners.</div>
+    <div class="note" hidden>Couldn't find the page edges. Drag the blue corners onto the page's corners.</div>
     <div class="page-body">
       <div class="pane"><span>Photo: drag the corners</span><canvas class="photo"></canvas></div>
       <div class="pane"><span>Result</span><canvas class="result"></canvas></div>
@@ -635,8 +661,10 @@ function setupDrag(page, canvas) {
   canvas.addEventListener("pointercancel", end);
 }
 
+const look = () => ({ mode: $("mode").value, dark: +$("dark").value, contrast: +$("contrast").value });
+
 function renderPreview(page) {
-  const img = renderPage(page, $("mode").value, 1200, 900);
+  const img = renderPage(page, look(), 1200, 900);
   const canvas = page.card.querySelector(".result");
   canvas.width = img.width; canvas.height = img.height;
   canvas.getContext("2d").putImageData(img, 0, 0);
@@ -658,7 +686,7 @@ async function savePdf() {
     const jpegs = [];
     for (const [i, page] of pages.entries()) {
       status(`Processing page ${i + 1} of ${pages.length}…`); await tick();
-      jpegs.push(await toJpeg(renderPage(page, $("mode").value, 4096, 3300)));
+      jpegs.push(await toJpeg(renderPage(page, look(), 4096, 3300)));
     }
     const pdf = buildPdf(jpegs, $("paper").value);
     if (handle) {
@@ -680,7 +708,28 @@ async function savePdf() {
 
 $("pick").addEventListener("click", () => $("files").click());
 $("files").addEventListener("change", e => { addFiles(e.target.files); e.target.value = ""; });
-$("mode").addEventListener("change", () => pages.forEach(renderPreview));
+$("mode").addEventListener("change", () => {
+  $("contrast-label").classList.toggle("off", $("mode").value === "bw");
+  $("contrast").disabled = $("mode").value === "bw";
+  pages.forEach(renderPreview);
+});
+// Sliders redraw the previews while dragging, at most one redraw at a time.
+let redrawing = false, redrawAgain = false;
+function redrawSoon() {
+  if (redrawing) { redrawAgain = true; return; }
+  redrawing = true;
+  requestAnimationFrame(() => {
+    pages.forEach(renderPreview);
+    redrawing = false;
+    if (redrawAgain) { redrawAgain = false; redrawSoon(); }
+  });
+}
+for (const id of ["dark", "contrast"]) {
+  const slider = $(id);
+  const show = () => { $(`${id}-value`).textContent = slider.value > 0 ? `+${slider.value}` : slider.value; };
+  slider.addEventListener("input", () => { show(); redrawSoon(); });
+  slider.addEventListener("dblclick", () => { slider.value = 0; show(); redrawSoon(); });
+}
 $("save").addEventListener("click", savePdf);
 window.addEventListener("resize", () => pages.forEach(drawPhoto));
 for (const ev of ["dragenter", "dragover"]) document.addEventListener(ev, e => { e.preventDefault(); $("drop").classList.add("over"); });
