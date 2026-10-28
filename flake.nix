@@ -1,5 +1,5 @@
 {
-    description = "Standalone Nix packages: lgl-papercutter, kenku-fm, boot-gardener, proton-wineland, nixed-error, wallpaperpicker, flow-desktop";
+    description = "Standalone Nix packages: lgl-papercutter, kenku-fm, boot-gardener, proton-wineland, nixed-error, wallpaperpicker, flow-desktop, photo2scan";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
@@ -45,6 +45,7 @@
               exec ${nixGLIntel}/bin/nixGLIntel ${nixpkgs.lib.getExe wallpaperpicker} "$@"
             '';
             flow-desktop = pkgs.callPackage ./flow-desktop/flow-desktop.nix { };
+            photo2scan = pkgs.callPackage ./photo2scan/photo2scan.nix { };
         } // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
             # Steam compat tools (prebuilt upstream releases), x86_64-linux only.
             proton-wineland = pkgs.callPackage ./proton-wineland/proton-wineland.nix { };
@@ -61,6 +62,7 @@
         nixed-error = final.callPackage ./nixed-error/nixed-error.nix { };
         wallpaperpicker = final.callPackage ./wallpaperpicker/wallpaperpicker.nix { };
         flow-desktop = final.callPackage ./flow-desktop/flow-desktop.nix { };
+        photo2scan = final.callPackage ./photo2scan/photo2scan.nix { };
         proton-wineland = final.callPackage ./proton-wineland/proton-wineland.nix { };
         proton-wineland-x86_64 = final.callPackage ./proton-wineland/proton-wineland.nix { variant = "x86_64"; };
       };

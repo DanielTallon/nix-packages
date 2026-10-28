@@ -10,6 +10,7 @@ use and shared here in case they're useful to anyone else:
 - **[`nixed-error`](./nixed-error)** — explains a failed NixOS rebuild in plain words: what went wrong, the file and line, whether it's your config, upstream, or your machine, and how to fix it. Rule-based (no LLM, no network). Own project, still in testing.
 - **[`wallpaperpicker`](./wallpaperpicker)** — [kwepaperpicker](https://gitlab.com/theblackdon/qs-kwepaperpicker), packaged here as `wallpaperpicker`, a swatch-deck wallpaper picker for Quickshell. Brings its own icon font, and on KDE Plasma hands the chosen wallpaper to Plasma by default. `wallpaperpicker-nixgl` is the same picker for Nix on other distros. See [wallpaperpicker](#wallpaperpicker) below. GPL-3.0-or-later.
 - **[`flow-desktop`](./flow-desktop)** — [Flow Desktop](https://github.com/Flow-Tube/Flow-Desktop), a privacy-respecting YouTube and YouTube Music client (Tauri 2), built from source. Based on [olafkfreund/nixos-FlowTube](https://github.com/olafkfreund/nixos-FlowTube)'s package, tracking upstream main, plus a local patch that adds thumbnail previews to the seekbar. GPL-3.0.
+- **[`photo2scan`](./photo2scan)** — turns phone photos of paper pages into a scanned-looking PDF: finds the page, undoes the camera angle, evens out the lighting. Handy for forms someone photographed at an angle and sent you. Also a [web page](https://danieltallon.github.io/nix-packages/photo2scan/) that works on Windows, Linux and phones with nothing to install. See [photo2scan](#photo2scan) below. Own project, MIT licensed.
 
 Each package is exposed on its own — installing or building one never pulls in the others.
 
@@ -23,6 +24,7 @@ nix run github:DanielTallon/nix-packages#boot-gardener
 nix run github:DanielTallon/nix-packages#nixed-error
 nix run github:DanielTallon/nix-packages#wallpaperpicker
 nix run github:DanielTallon/nix-packages#flow-desktop
+nix run github:DanielTallon/nix-packages#photo2scan -- -o form.pdf photo1.jpg photo2.jpg
 ```
 **Run without installing, and without flakes enabled:**
 ```sh
@@ -32,6 +34,7 @@ nix run --extra-experimental-features "nix-command flakes" github:DanielTallon/n
 nix run --extra-experimental-features "nix-command flakes" github:DanielTallon/nix-packages#nixed-error
 nix run --extra-experimental-features "nix-command flakes" github:DanielTallon/nix-packages#wallpaperpicker
 nix run --extra-experimental-features "nix-command flakes" github:DanielTallon/nix-packages#flow-desktop
+nix run --extra-experimental-features "nix-command flakes" github:DanielTallon/nix-packages#photo2scan -- -o form.pdf photo1.jpg photo2.jpg
 ```
 
 `nixed-error` with no arguments re-evaluates your system config and explains what fails.
@@ -46,6 +49,7 @@ nix profile install github:DanielTallon/nix-packages#boot-gardener
 nix profile install github:DanielTallon/nix-packages#nixed-error
 nix profile install github:DanielTallon/nix-packages#wallpaperpicker
 nix profile install github:DanielTallon/nix-packages#flow-desktop
+nix profile install github:DanielTallon/nix-packages#photo2scan
 ```
 
 (`proton-wineland` is a Steam compatibility tool, not a program you run or install
@@ -66,7 +70,7 @@ inputs.nix-packages.url = "github:DanielTallon/nix-packages";
 nixpkgs.overlays = [ inputs.nix-packages.overlays.default ];
 # now available anywhere in your config as pkgs.lgl-papercutter / pkgs.kenku-fm /
 # pkgs.boot-gardener / pkgs.proton-wineland / pkgs.nixed-error /
-# pkgs.wallpaperpicker / pkgs.flow-desktop
+# pkgs.wallpaperpicker / pkgs.flow-desktop / pkgs.photo2scan
 ```
 
 ## A note on `kenku-fm`
@@ -173,6 +177,11 @@ nix-packages/
 ├── flow-desktop/
 │   ├── flow-desktop.nix
 │   └── flow-desktop-storyboard-preview.patch
+├── photo2scan/
+│   ├── photo2scan.nix
+│   ├── photo2scan.py
+│   └── web/
+│       └── index.html
 └── proton-wineland/
     ├── proton-wineland.nix
     ├── sources.json
@@ -251,6 +260,40 @@ Wineland 11.0-20260930 and newer restores DLSS, frame generation, ray tracing an
   `MANGOHUD=1 PROTON_ENABLE_NVAPI=1 %command%`
 - Wineland enables Wine's Wayland driver by default. On a multi-monitor setup, the game may open on the wrong display the first time. Moving it to the right screen and setting the resolution once in the game's settings sticks across launches. If windowing misbehaves, `PROTON_ENABLE_WAYLAND=0` falls back to XWayland.
 
+
+## photo2scan
+
+### On the web (any computer, including Windows)
+
+Open **<https://danieltallon.github.io/nix-packages/photo2scan/>**, click
+**Choose photos…**, drag any orange corner the page finder got wrong, and click
+**Save PDF**. Everything runs in the browser; photos are never uploaded. It is
+one self-contained file, [`photo2scan/web/index.html`](./photo2scan/web/index.html),
+with no libraries, so it also works opened straight from disk with no internet.
+Browsers other than Safari can't open HEIC photos; JPEG and PNG work everywhere.
+
+The `pages` workflow publishes it whenever that file changes on `main`. It needs
+**Settings → Pages → Source: GitHub Actions** set once on the repository.
+
+### Command line
+
+Give it the photos in page order and the PDF to write:
+
+```sh
+photo2scan -o form.pdf IMG_0001.jpg IMG_0002.jpg
+```
+
+For each photo it finds the page (bright, low-color paper against a darker or
+more colorful background), stretches its four corners back to a rectangle, and
+flattens shadows so the paper comes out white. Pages are fitted to US Letter.
+
+- `-m gray` (default) keeps pencil and gray shading; `-m bw` gives a
+  black-and-white photocopy look; `-m color` keeps colors.
+- `--debug` also writes `<photo>.detected.jpg` next to each photo with the page
+  it found outlined in red. Use it when a page comes out cropped wrong.
+
+It corrects camera angle, not paper that is curled or folded. A white page on a
+white table may not be found; then it says so and uses the whole photo.
 
 ## License
 

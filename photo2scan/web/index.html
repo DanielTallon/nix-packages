@@ -1,0 +1,691 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>photo2scan</title>
+<meta name="description" content="Turn phone photos of paper pages into a straightened, scanned-looking PDF. Runs entirely in your browser.">
+<style>
+  :root {
+    --bg: #f6f6f4;
+    --surface: #ffffff;
+    --text: #1d1f21;
+    --muted: #62666b;
+    --border: #dcdcd8;
+    --accent: #2563c9;
+    --accent-text: #ffffff;
+    --danger: #b3261e;
+    --handle: #e8590c;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17191c;
+      --surface: #212428;
+      --text: #e7e8ea;
+      --muted: #9a9fa6;
+      --border: #363a40;
+      --accent: #5b8def;
+      --accent-text: #0e1216;
+      --danger: #f2827a;
+      --handle: #ff8a3d;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 1.6rem; margin: 0 0 4px; }
+  .lede { color: var(--muted); margin: 0 0 20px; }
+  .toolbar {
+    display: flex; flex-wrap: wrap; gap: 12px; align-items: end;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px; position: sticky; top: 0; z-index: 2;
+  }
+  .toolbar label { display: flex; flex-direction: column; gap: 4px; font-size: 0.85rem; color: var(--muted); }
+  select, input[type=text], button {
+    font: inherit; color: var(--text); background: var(--bg);
+    border: 1px solid var(--border); border-radius: 7px; padding: 7px 10px;
+  }
+  input[type=text] { width: 12em; }
+  button { cursor: pointer; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
+  .spacer { flex: 1; }
+  #status { color: var(--muted); font-size: 0.9rem; min-height: 1.5em; margin: 10px 2px; }
+  #drop {
+    border: 2px dashed var(--border); border-radius: 10px; padding: 40px 16px;
+    text-align: center; color: var(--muted); margin-top: 16px;
+  }
+  #drop.over { border-color: var(--accent); color: var(--text); }
+  .page {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px; margin-top: 16px;
+  }
+  .page-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+  .page-head .name { font-weight: 600; margin-right: auto; overflow-wrap: anywhere; }
+  .page-head button { padding: 4px 10px; font-size: 0.9rem; }
+  .page-body { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 700px) { .page-body { grid-template-columns: 1fr; } }
+  .pane { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .pane span { font-size: 0.85rem; color: var(--muted); }
+  .pane canvas { width: 100%; height: auto; background: #0003; border-radius: 6px; }
+  .photo { touch-action: none; cursor: crosshair; }
+  .note { color: var(--danger); font-size: 0.9rem; }
+  footer { color: var(--muted); font-size: 0.85rem; margin-top: 32px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>photo2scan</h1>
+  <p class="lede">Turn phone photos of paper pages into a straightened, scanned-looking PDF.
+    Everything happens in this browser; your photos are never uploaded.</p>
+
+  <div class="toolbar">
+    <button id="pick" class="primary">Choose photos…</button>
+    <input id="files" type="file" accept="image/*" multiple hidden>
+    <label>Look
+      <select id="mode">
+        <option value="gray">Gray</option>
+        <option value="bw">Black and white</option>
+        <option value="color">Color</option>
+      </select>
+    </label>
+    <label>Paper
+      <select id="paper">
+        <option value="letter">US Letter</option>
+        <option value="a4">A4</option>
+      </select>
+    </label>
+    <label>File name
+      <input id="name" type="text" value="scan.pdf">
+    </label>
+    <span class="spacer"></span>
+    <button id="save" class="primary" disabled>Save PDF</button>
+  </div>
+  <div id="status"></div>
+
+  <div id="drop">Drop photos here, or use <strong>Choose photos…</strong>.<br>
+    Pages appear in the order you add them; use the arrows to reorder.</div>
+  <div id="pages"></div>
+
+  <footer>Drag the orange corners if a page's outline is off. The result updates when you let go.</footer>
+</main>
+
+<script>
+"use strict";
+
+// ---------- small image helpers (grayscale arrays are Float32Array, row-major) ----------
+
+// Box blur with edge clamping, `passes` times (three passes ≈ Gaussian).
+function boxBlur(src, w, h, r, passes = 1) {
+  let a = Float32Array.from(src), b = new Float32Array(w * h);
+  const n = 2 * r + 1;
+  for (let p = 0; p < passes; p++) {
+    for (let y = 0; y < h; y++) {
+      const row = y * w;
+      let sum = 0;
+      for (let i = -r; i <= r; i++) sum += a[row + Math.min(w - 1, Math.max(0, i))];
+      for (let x = 0; x < w; x++) {
+        b[row + x] = sum / n;
+        sum += a[row + Math.min(w - 1, x + r + 1)] - a[row + Math.max(0, x - r)];
+      }
+    }
+    for (let x = 0; x < w; x++) {
+      let sum = 0;
+      for (let i = -r; i <= r; i++) sum += b[Math.min(h - 1, Math.max(0, i)) * w + x];
+      for (let y = 0; y < h; y++) {
+        a[y * w + x] = sum / n;
+        sum += b[Math.min(h - 1, y + r + 1) * w + x] - b[Math.max(0, y - r) * w + x];
+      }
+    }
+  }
+  return a;
+}
+
+// Binary dilate (max) or erode (min) with a square of radius r, via prefix sums.
+function morph(mask, w, h, r, dilate) {
+  const tmp = new Uint8Array(w * h), out = new Uint8Array(w * h);
+  const ps = new Int32Array(Math.max(w, h) + 1);
+  const pass = (get, set, len, lines) => {
+    for (let l = 0; l < lines; l++) {
+      for (let i = 0; i < len; i++) ps[i + 1] = ps[i] + get(l, i);
+      for (let i = 0; i < len; i++) {
+        const lo = Math.max(0, i - r), hi = Math.min(len, i + r + 1);
+        const c = ps[hi] - ps[lo];
+        set(l, i, dilate ? (c > 0 ? 1 : 0) : (c === hi - lo ? 1 : 0));
+      }
+    }
+  };
+  pass((y, x) => mask[y * w + x], (y, x, v) => { tmp[y * w + x] = v; }, w, h);
+  pass((x, y) => tmp[y * w + x], (x, y, v) => { out[y * w + x] = v; }, h, w);
+  return out;
+}
+
+function otsu(values) {
+  const hist = new Float64Array(256);
+  for (const v of values) hist[Math.max(0, Math.min(255, v | 0))]++;
+  const total = values.length;
+  let sumAll = 0;
+  for (let i = 0; i < 256; i++) sumAll += i * hist[i];
+  let wB = 0, sumB = 0, best = 0, thresh = 127;
+  for (let t = 0; t < 256; t++) {
+    wB += hist[t];
+    if (wB === 0) continue;
+    const wF = total - wB;
+    if (wF === 0) break;
+    sumB += t * hist[t];
+    const mB = sumB / wB, mF = (sumAll - sumB) / wF;
+    const between = wB * wF * (mB - mF) * (mB - mF);
+    if (between > best) { best = between; thresh = t; }
+  }
+  return thresh;
+}
+
+// Resample a grayscale array to a new size, bilinear.
+function resize(src, w, h, nw, nh) {
+  const out = new Float32Array(nw * nh);
+  const sx = w / nw, sy = h / nh;
+  for (let y = 0; y < nh; y++) {
+    const fy = Math.min(h - 1, Math.max(0, (y + 0.5) * sy - 0.5));
+    const y0 = fy | 0, y1 = Math.min(h - 1, y0 + 1), ty = fy - y0;
+    for (let x = 0; x < nw; x++) {
+      const fx = Math.min(w - 1, Math.max(0, (x + 0.5) * sx - 0.5));
+      const x0 = fx | 0, x1 = Math.min(w - 1, x0 + 1), tx = fx - x0;
+      const top = src[y0 * w + x0] * (1 - tx) + src[y0 * w + x1] * tx;
+      const bot = src[y1 * w + x0] * (1 - tx) + src[y1 * w + x1] * tx;
+      out[y * nw + x] = top * (1 - ty) + bot * ty;
+    }
+  }
+  return out;
+}
+
+// Median filter with a square of radius r (used on small images only).
+function median(src, w, h, r) {
+  const out = new Float32Array(w * h), hist = new Int32Array(256);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      hist.fill(0);
+      let n = 0;
+      for (let yy = Math.max(0, y - r); yy <= Math.min(h - 1, y + r); yy++)
+        for (let xx = Math.max(0, x - r); xx <= Math.min(w - 1, x + r); xx++) {
+          hist[src[yy * w + xx] | 0]++; n++;
+        }
+      let acc = 0, v = 0;
+      while (acc + hist[v] <= n / 2) acc += hist[v++];
+      out[y * w + x] = v;
+    }
+  }
+  return out;
+}
+
+// ---------- finding the page ----------
+
+// Returns the page's corners [tl, tr, br, bl] in the bitmap's pixels, or null.
+function findPage(bitmap) {
+  const s = 800 / Math.max(bitmap.width, bitmap.height);
+  const w = Math.round(bitmap.width * s), h = Math.round(bitmap.height * s);
+  const ctx = new OffscreenCanvas(w, h).getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(bitmap, 0, 0, w, h);
+  const px = ctx.getImageData(0, 0, w, h).data;
+
+  // Paper is bright and low in color; the background usually isn't.
+  let score = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) {
+    const r = px[4 * i], g = px[4 * i + 1], b = px[4 * i + 2];
+    const v = Math.max(r, g, b), m = Math.min(r, g, b);
+    const sat = v ? (v - m) * 255 / v : 0;
+    score[i] = Math.max(0, v - sat);
+  }
+  const raw = score;
+  score = boxBlur(score, w, h, 2, 2);
+  const t = otsu(score);
+  let mask = new Uint8Array(w * h);
+  const bright = new Uint8Array(w * h);  // unblurred, for refineEdges
+  for (let i = 0; i < w * h; i++) { mask[i] = score[i] > t ? 1 : 0; bright[i] = raw[i] > t ? 1 : 0; }
+
+  // Close gaps left by dark text and table lines inside the page.
+  mask = morph(morph(mask, w, h, 12, true), w, h, 12, false);
+  mask = morph(morph(mask, w, h, 6, false), w, h, 6, true);
+
+  // Keep the largest connected bright area.
+  const label = new Int32Array(w * h), stack = new Int32Array(w * h);
+  let best = 0, bestLabel = 0, next = 0;
+  for (let start = 0; start < w * h; start++) {
+    if (!mask[start] || label[start]) continue;
+    next++;
+    let top = 0, size = 0;
+    stack[top++] = start; label[start] = next;
+    while (top) {
+      const i = stack[--top]; size++;
+      const x = i % w;
+      const nb = [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, i - w, i + w];
+      for (const j of nb) if (j >= 0 && j < w * h && mask[j] && !label[j]) { label[j] = next; stack[top++] = j; }
+    }
+    if (size > best) { best = size; bestLabel = next; }
+  }
+  if (best < 0.2 * w * h) return null;
+
+  // Corners are the extreme points along the two diagonals.
+  let tl, tr, br, bl, minS = Infinity, maxS = -Infinity, minD = Infinity, maxD = -Infinity;
+  for (let i = 0; i < w * h; i++) {
+    if (label[i] !== bestLabel) continue;
+    const x = i % w, y = (i / w) | 0, sum = x + y, diff = x - y;
+    if (sum < minS) { minS = sum; tl = [x, y]; }
+    if (sum > maxS) { maxS = sum; br = [x, y]; }
+    if (diff > maxD) { maxD = diff; tr = [x, y]; }
+    if (diff < minD) { minD = diff; bl = [x, y]; }
+  }
+  return refineEdges([tl, tr, br, bl], bright, w, h).map(([x, y]) => [
+    Math.max(0, Math.min(bitmap.width, (x + 0.5) / s)),
+    Math.max(0, Math.min(bitmap.height, (y + 0.5) / s)),
+  ]);
+}
+
+// The bright area can include things touching the page, like a notebook's
+// spiral rings. For each side, try lines at different inward offsets at each
+// end (so they can tilt) and keep the one that is most often a real paper
+// edge: solid paper just inside, darker background just outside.
+function refineEdges(quad, bright, w, h) {
+  const [qw, qh] = pageSize(quad), maxOff = Math.round(0.1 * Math.min(qw, qh));
+  const at = (x, y) => {
+    const xi = Math.round(x), yi = Math.round(y);
+    return xi >= 0 && yi >= 0 && xi < w && yi < h ? bright[yi * w + xi] : 0;
+  };
+  const SAMPLES = 60;
+  const lines = quad.map((p, i) => {
+    const q = quad[(i + 1) % 4], len = dist(p, q) || 1;
+    const n = [-(q[1] - p[1]) / len, (q[0] - p[0]) / len];  // inward, corners go clockwise
+    // Is the point at u along the side, moved o inward, on a paper edge?
+    const edgeAt = (u, o) => {
+      const x = p[0] + u * (q[0] - p[0]) + o * n[0], y = p[1] + u * (q[1] - p[1]) + o * n[1];
+      const ok = d => at(x + d * n[0], y + d * n[1]);
+      return ok(2) && ok(4) && ok(6) && !ok(-2) && !ok(-4) ? 1 : 0;
+    };
+    // edges[o][k]: sample k along the side, offset o (shifted by 6 so the side
+    // can also move slightly outward).
+    const us = Array.from({ length: SAMPLES }, (_, k) => 0.1 + 0.8 * k / (SAMPLES - 1));
+    const edges = [];
+    for (let o = -6; o <= maxOff; o++) edges.push(us.map(u => edgeAt(u, o)));
+    let best = -1, bestO = [0, 0];
+    for (let o1 = -6; o1 <= maxOff; o1++)
+      for (let o2 = -6; o2 <= maxOff; o2++) {
+        let s = 0;
+        for (let k = 0; k < SAMPLES; k++) {
+          const o = Math.round(o1 + (o2 - o1) * us[k]);
+          s += edges[o + 6][k];
+        }
+        if (s > best) { best = s; bestO = [o1, o2]; }
+      }
+    // Too few edge hits means no clear edge; keep the side where it was.
+    if (best < SAMPLES * 0.25) bestO = [0, 0];
+    const point = (u, o) => [p[0] + u * (q[0] - p[0]) + o * n[0], p[1] + u * (q[1] - p[1]) + o * n[1]];
+    return [point(0, bestO[0]), point(1, bestO[1])];
+  });
+  const meet = ([a, b], [c, d]) => {
+    const r = [b[0] - a[0], b[1] - a[1]], s = [d[0] - c[0], d[1] - c[1]];
+    const den = r[0] * s[1] - r[1] * s[0];
+    if (Math.abs(den) < 1e-9) return null;
+    const t = ((c[0] - a[0]) * s[1] - (c[1] - a[1]) * s[0]) / den;
+    return [a[0] + t * r[0], a[1] + t * r[1]];
+  };
+  // Corner i is where the side ending at it meets the side starting at it.
+  const refined = quad.map((_, i) => meet(lines[(i + 3) % 4], lines[i]));
+  const area = c => Math.abs(c.reduce((acc, p, i) => {
+    const q = c[(i + 1) % 4]; return acc + p[0] * q[1] - q[0] * p[1];
+  }, 0)) / 2;
+  if (refined.some(c => !c) || area(refined) < 0.6 * area(quad)) return quad;
+  return refined;
+}
+
+function defaultCorners(bitmap) {
+  const w = bitmap.width, h = bitmap.height, m = 0.03;
+  return [[w * m, h * m], [w * (1 - m), h * m], [w * (1 - m), h * (1 - m)], [w * m, h * (1 - m)]];
+}
+
+// ---------- straightening ----------
+
+// 3x3 homography (row-major, h[8] = 1) taking each `from` point to its `to` point.
+function homography(from, to) {
+  const A = [], bvec = [];
+  for (let i = 0; i < 4; i++) {
+    const [x, y] = from[i], [X, Y] = to[i];
+    A.push([x, y, 1, 0, 0, 0, -X * x, -X * y]); bvec.push(X);
+    A.push([0, 0, 0, x, y, 1, -Y * x, -Y * y]); bvec.push(Y);
+  }
+  for (let c = 0; c < 8; c++) {
+    let p = c;
+    for (let r = c + 1; r < 8; r++) if (Math.abs(A[r][c]) > Math.abs(A[p][c])) p = r;
+    [A[c], A[p]] = [A[p], A[c]]; [bvec[c], bvec[p]] = [bvec[p], bvec[c]];
+    for (let r = 0; r < 8; r++) {
+      if (r === c) continue;
+      const f = A[r][c] / A[c][c];
+      for (let k = c; k < 8; k++) A[r][k] -= f * A[c][k];
+      bvec[r] -= f * bvec[c];
+    }
+  }
+  return [...bvec.map((v, i) => v / A[i][i]), 1];
+}
+
+const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+
+// Straightened page size in source pixels for the given corners.
+function pageSize(c) {
+  return [Math.max(dist(c[0], c[1]), dist(c[3], c[2])), Math.max(dist(c[0], c[3]), dist(c[1], c[2]))];
+}
+
+// Warp the quad `corners` of an RGBA source to an outW x outH RGBA image, bilinear.
+function warp(src, sw, sh, corners, outW, outH) {
+  const H = homography([[0, 0], [outW, 0], [outW, outH], [0, outH]], corners);
+  const out = new ImageData(outW, outH), d = out.data;
+  for (let v = 0; v < outH; v++) {
+    for (let u = 0; u < outW; u++) {
+      const uu = u + 0.5, vv = v + 0.5;
+      const z = H[6] * uu + H[7] * vv + 1;
+      const x = Math.min(sw - 1.001, Math.max(0, (H[0] * uu + H[1] * vv + H[2]) / z - 0.5));
+      const y = Math.min(sh - 1.001, Math.max(0, (H[3] * uu + H[4] * vv + H[5]) / z - 0.5));
+      const x0 = x | 0, y0 = y | 0, tx = x - x0, ty = y - y0;
+      const i00 = 4 * (y0 * sw + x0), i10 = i00 + 4, i01 = i00 + 4 * sw, i11 = i01 + 4;
+      const o = 4 * (v * outW + u);
+      for (let ch = 0; ch < 3; ch++) {
+        const top = src[i00 + ch] * (1 - tx) + src[i10 + ch] * tx;
+        const bot = src[i01 + ch] * (1 - tx) + src[i11 + ch] * tx;
+        d[o + ch] = top * (1 - ty) + bot * ty;
+      }
+      d[o + 3] = 255;
+    }
+  }
+  return out;
+}
+
+// ---------- cleaning up the lighting ----------
+
+// Estimate the paper's brightness under text and shadows: block max, then blur.
+function background(chan, w, h, f) {
+  const bw = Math.ceil(w / f), bh = Math.ceil(h / f), small = new Float32Array(bw * bh);
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      const j = ((y / f) | 0) * bw + ((x / f) | 0);
+      if (chan[y * w + x] > small[j]) small[j] = chan[y * w + x];
+    }
+  return resize(boxBlur(small, bw, bh, 3, 3), bw, bh, w, h);
+}
+
+function clean(img, mode) {
+  const { width: w, height: h, data: d } = img, n = w * h;
+  const k = w / 2500;                       // tuned on ~2500 px wide pages
+  const f = Math.max(2, Math.round(8 * k));
+
+  if (mode === "color") {
+    for (let ch = 0; ch < 3; ch++) {
+      const c = new Float32Array(n);
+      for (let i = 0; i < n; i++) c[i] = d[4 * i + ch];
+      const bg = background(c, w, h, f);
+      for (let i = 0; i < n; i++) d[4 * i + ch] = Math.min(255, c[i] * 255 / Math.max(1, bg[i]));
+    }
+    return img;
+  }
+
+  const gray = new Float32Array(n);
+  for (let i = 0; i < n; i++) gray[i] = 0.299 * d[4 * i] + 0.587 * d[4 * i + 1] + 0.114 * d[4 * i + 2];
+  const bg = background(gray, w, h, f);
+  const flat = new Float32Array(n);
+  for (let i = 0; i < n; i++) flat[i] = Math.min(255, gray[i] * 255 / Math.max(1, bg[i]));
+
+  let out;
+  if (mode === "bw") {
+    const mean = boxBlur(flat, w, h, Math.max(3, Math.round(15 * k)), 2);
+    // Large dark areas (filled header bars) only keep their edges above, so
+    // also blacken anything much darker than the paper around it. The paper is
+    // measured over a wide area, so shadows across the page don't count.
+    const sw = 200, sh = Math.max(1, Math.round(200 * h / w));
+    const paper = resize(median(resize(gray, w, h, sw, sh), sw, sh, 10), sw, sh, w, h);
+    out = new Float32Array(n);
+    for (let i = 0; i < n; i++)
+      out[i] = flat[i] > mean[i] - 15 && gray[i] >= paper[i] * 0.55 ? 255 : 0;
+  } else {
+    out = flat.map(v => Math.max(0, Math.min(255, v * 1.15 - 30)));
+  }
+  for (let i = 0; i < n; i++) d[4 * i] = d[4 * i + 1] = d[4 * i + 2] = out[i];
+  return img;
+}
+
+// ---------- one page, start to finish ----------
+
+// Draw the bitmap scaled so its long side is at most maxSide; returns pixels and scale.
+function sourcePixels(bitmap, maxSide) {
+  const s = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
+  const w = Math.round(bitmap.width * s), h = Math.round(bitmap.height * s);
+  const ctx = new OffscreenCanvas(w, h).getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(bitmap, 0, 0, w, h);
+  return { data: ctx.getImageData(0, 0, w, h).data, w, h, s };
+}
+
+// Render a page with the given source resolution and output long-side cap.
+function renderPage(page, mode, srcMax, outMax) {
+  const src = page.cache && page.cache.max === srcMax ? page.cache : sourcePixels(page.bitmap, srcMax);
+  if (srcMax <= 1200) page.cache = Object.assign(src, { max: srcMax });  // keep the preview source
+  const corners = page.corners.map(([x, y]) => [x * src.s, y * src.s]);
+  let [w, h] = pageSize(corners);
+  const fit = Math.min(1, outMax / Math.max(w, h));
+  w = Math.max(1, Math.round(w * fit)); h = Math.max(1, Math.round(h * fit));
+  return clean(warp(src.data, src.w, src.h, corners, w, h), mode);
+}
+
+// ---------- PDF writing (JPEG pages, no libraries) ----------
+
+function buildPdf(jpegs, paper) {
+  const [pw, ph] = paper === "a4" ? [595.28, 841.89] : [612, 792];
+  const enc = new TextEncoder(), parts = [], offsets = [];
+  let length = 0;
+  const push = chunk => { const b = typeof chunk === "string" ? enc.encode(chunk) : chunk; parts.push(b); length += b.length; };
+  const obj = (num, body) => { offsets[num] = length; push(`${num} 0 obj\n`); body(); push("\nendobj\n"); };
+
+  push("%PDF-1.4\n%\xE2\xE3\xCF\xD3\n");
+  const pageNums = jpegs.map((_, i) => 3 + 3 * i);
+  obj(1, () => push("<< /Type /Catalog /Pages 2 0 R >>"));
+  obj(2, () => push(`<< /Type /Pages /Kids [${pageNums.map(n => n + " 0 R").join(" ")}] /Count ${jpegs.length} >>`));
+  jpegs.forEach((j, i) => {
+    const p = pageNums[i];
+    // Fit the image inside the paper, centered.
+    const s = Math.min(pw / j.w, ph / j.h), iw = j.w * s, ih = j.h * s;
+    const content = `q ${iw.toFixed(2)} 0 0 ${ih.toFixed(2)} ${((pw - iw) / 2).toFixed(2)} ${((ph - ih) / 2).toFixed(2)} cm /Im0 Do Q`;
+    obj(p, () => push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pw} ${ph}] ` +
+      `/Resources << /XObject << /Im0 ${p + 2} 0 R >> >> /Contents ${p + 1} 0 R >>`));
+    obj(p + 1, () => { push(`<< /Length ${content.length} >>\nstream\n${content}\nendstream`); });
+    obj(p + 2, () => {
+      push(`<< /Type /XObject /Subtype /Image /Width ${j.w} /Height ${j.h} /ColorSpace /DeviceRGB ` +
+        `/BitsPerComponent 8 /Filter /DCTDecode /Length ${j.bytes.length} >>\nstream\n`);
+      push(j.bytes); push("\nendstream");
+    });
+  });
+  const count = 3 + 3 * jpegs.length, xref = length;
+  let table = `xref\n0 ${count}\n0000000000 65535 f \n`;
+  for (let i = 1; i < count; i++) table += String(offsets[i]).padStart(10, "0") + " 00000 n \n";
+  push(table + `trailer\n<< /Size ${count} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+  return new Blob(parts, { type: "application/pdf" });
+}
+
+async function toJpeg(img) {
+  const canvas = new OffscreenCanvas(img.width, img.height);
+  canvas.getContext("2d").putImageData(img, 0, 0);
+  const blob = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.88 });
+  return { bytes: new Uint8Array(await blob.arrayBuffer()), w: img.width, h: img.height };
+}
+
+// ---------- UI ----------
+
+const $ = id => document.getElementById(id);
+const pages = [];
+const status = msg => { $("status").textContent = msg; };
+const tick = () => new Promise(r => setTimeout(r, 0));
+
+async function addFiles(files) {
+  const list = [...files].filter(f => f.type.startsWith("image/") || /\.(heic|heif)$/i.test(f.name));
+  for (const file of list) {
+    status(`Opening ${file.name}…`); await tick();
+    let bitmap;
+    try {
+      bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
+    } catch {
+      status(`Couldn't open ${file.name}.` + (/\.(heic|heif)$/i.test(file.name)
+        ? " This browser can't read HEIC photos; ask the sender to send JPEG, or open it in Safari." : ""));
+      continue;
+    }
+    const found = findPage(bitmap);
+    const page = { name: file.name, bitmap, corners: found || defaultCorners(bitmap), missed: !found };
+    page.detected = page.corners.map(c => [...c]);
+    pages.push(page);
+    buildCard(page);
+    renderPreview(page);
+  }
+  $("save").disabled = pages.length === 0;
+  $("drop").hidden = pages.length > 0;
+  if (list.length) status(`${pages.length} page${pages.length === 1 ? "" : "s"} ready.`);
+}
+
+function buildCard(page) {
+  const card = document.createElement("section");
+  card.className = "page";
+  card.innerHTML = `
+    <div class="page-head">
+      <span class="name"></span>
+      <button data-act="up" title="Move earlier">↑</button>
+      <button data-act="down" title="Move later">↓</button>
+      <button data-act="rotate" title="Rotate the result a quarter turn">Rotate ⟳</button>
+      <button data-act="reset" title="Go back to the detected corners">Reset corners</button>
+      <button data-act="remove">Remove</button>
+    </div>
+    <div class="note" hidden>Couldn't find the page edges. Drag the orange corners onto the page's corners.</div>
+    <div class="page-body">
+      <div class="pane"><span>Photo: drag the corners</span><canvas class="photo"></canvas></div>
+      <div class="pane"><span>Result</span><canvas class="result"></canvas></div>
+    </div>`;
+  page.card = card;
+  card.querySelector(".name").textContent = page.name;
+  card.querySelector(".note").hidden = !page.missed;
+  card.querySelector(".page-head").addEventListener("click", e => {
+    const act = e.target.dataset && e.target.dataset.act;
+    if (!act) return;
+    const i = pages.indexOf(page);
+    if (act === "up" && i > 0) [pages[i - 1], pages[i]] = [pages[i], pages[i - 1]];
+    if (act === "down" && i < pages.length - 1) [pages[i + 1], pages[i]] = [pages[i], pages[i + 1]];
+    if (act === "rotate") { const c = page.corners; page.corners = [c[3], c[0], c[1], c[2]]; renderPreview(page); }
+    if (act === "reset") { page.corners = page.detected.map(c => [...c]); drawPhoto(page); renderPreview(page); }
+    if (act === "remove") { pages.splice(i, 1); card.remove(); }
+    if (act === "up" || act === "down") for (const p of pages) $("pages").appendChild(p.card);
+    $("save").disabled = pages.length === 0;
+    $("drop").hidden = pages.length > 0;
+  });
+  setupDrag(page, card.querySelector(".photo"));
+  $("pages").appendChild(card);
+  drawPhoto(page);
+}
+
+function drawPhoto(page) {
+  const canvas = page.card.querySelector(".photo");
+  const s = Math.min(1, 1000 / Math.max(page.bitmap.width, page.bitmap.height));
+  canvas.width = Math.round(page.bitmap.width * s);
+  canvas.height = Math.round(page.bitmap.height * s);
+  page.viewScale = s;
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(page.bitmap, 0, 0, canvas.width, canvas.height);
+  const unit = canvas.width / Math.max(1, canvas.getBoundingClientRect().width || canvas.width);
+  const pts = page.corners.map(([x, y]) => [x * s, y * s]);
+  ctx.lineWidth = 3 * unit;
+  ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue("--handle");
+  ctx.fillStyle = ctx.strokeStyle;
+  ctx.beginPath();
+  pts.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y));
+  ctx.closePath(); ctx.stroke();
+  for (const [x, y] of pts) {
+    ctx.beginPath(); ctx.arc(x, y, 9 * unit, 0, Math.PI * 2); ctx.globalAlpha = 0.35; ctx.fill();
+    ctx.globalAlpha = 1; ctx.stroke();
+  }
+}
+
+function setupDrag(page, canvas) {
+  let active = -1;
+  const toImage = e => {
+    const r = canvas.getBoundingClientRect(), k = canvas.width / r.width;
+    return [(e.clientX - r.left) * k / page.viewScale, (e.clientY - r.top) * k / page.viewScale];
+  };
+  canvas.addEventListener("pointerdown", e => {
+    const [x, y] = toImage(e), r = canvas.getBoundingClientRect();
+    const reach = 28 * (canvas.width / r.width) / page.viewScale;
+    let best = Infinity;
+    page.corners.forEach((c, i) => { const d = dist(c, [x, y]); if (d < best) { best = d; active = i; } });
+    if (best > reach) { active = -1; return; }
+    canvas.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+  canvas.addEventListener("pointermove", e => {
+    if (active < 0) return;
+    const [x, y] = toImage(e);
+    page.corners[active] = [Math.max(0, Math.min(page.bitmap.width, x)), Math.max(0, Math.min(page.bitmap.height, y))];
+    drawPhoto(page);
+  });
+  const end = () => { if (active >= 0) { active = -1; renderPreview(page); } };
+  canvas.addEventListener("pointerup", end);
+  canvas.addEventListener("pointercancel", end);
+}
+
+function renderPreview(page) {
+  const img = renderPage(page, $("mode").value, 1200, 900);
+  const canvas = page.card.querySelector(".result");
+  canvas.width = img.width; canvas.height = img.height;
+  canvas.getContext("2d").putImageData(img, 0, 0);
+}
+
+async function savePdf() {
+  const button = $("save");
+  button.disabled = true;
+  let name = $("name").value.trim() || "scan.pdf";
+  if (!/\.pdf$/i.test(name)) name += ".pdf";
+  try {
+    // Ask where to save first (Chrome and Edge), so the dialog isn't delayed by the work.
+    let handle = null;
+    if (window.showSaveFilePicker) {
+      try {
+        handle = await showSaveFilePicker({ suggestedName: name, types: [{ description: "PDF", accept: { "application/pdf": [".pdf"] } }] });
+      } catch (e) { if (e.name === "AbortError") { status("Save canceled."); return; } }
+    }
+    const jpegs = [];
+    for (const [i, page] of pages.entries()) {
+      status(`Processing page ${i + 1} of ${pages.length}…`); await tick();
+      jpegs.push(await toJpeg(renderPage(page, $("mode").value, 4096, 3300)));
+    }
+    const pdf = buildPdf(jpegs, $("paper").value);
+    if (handle) {
+      const writable = await handle.createWritable();
+      await writable.write(pdf); await writable.close();
+      status(`Saved ${handle.name}.`);
+    } else {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(pdf); a.download = name; a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+      status(`Saved ${name} to your Downloads.`);
+    }
+  } catch (e) {
+    status(`Couldn't make the PDF: ${e.message}`);
+  } finally {
+    button.disabled = pages.length === 0;
+  }
+}
+
+$("pick").addEventListener("click", () => $("files").click());
+$("files").addEventListener("change", e => { addFiles(e.target.files); e.target.value = ""; });
+$("mode").addEventListener("change", () => pages.forEach(renderPreview));
+$("save").addEventListener("click", savePdf);
+window.addEventListener("resize", () => pages.forEach(drawPhoto));
+for (const ev of ["dragenter", "dragover"]) document.addEventListener(ev, e => { e.preventDefault(); $("drop").classList.add("over"); });
+for (const ev of ["dragleave", "drop"]) document.addEventListener(ev, e => { e.preventDefault(); $("drop").classList.remove("over"); });
+document.addEventListener("drop", e => addFiles(e.dataTransfer.files));
+</script>
+</body>
+</html>

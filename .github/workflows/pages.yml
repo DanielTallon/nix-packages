@@ -1,0 +1,45 @@
+name: pages
+
+# Publishes the photo2scan web page to GitHub Pages:
+# https://danieltallon.github.io/nix-packages/photo2scan/
+# Needs Settings → Pages → Source set to "GitHub Actions" (one-time).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "photo2scan/web/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}photo2scan/
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assemble site
+        run: |
+          mkdir -p site/photo2scan
+          cp photo2scan/web/index.html site/photo2scan/index.html
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
