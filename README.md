@@ -10,7 +10,7 @@ use and shared here in case they're useful to anyone else:
 - **[`nixed-error`](./nixed-error)** — explains a failed NixOS rebuild in plain words: what went wrong, the file and line, whether it's your config, upstream, or your machine, and how to fix it. Rule-based (no LLM, no network). Own project, still in testing.
 - **[`wallpaperpicker`](./wallpaperpicker)** — [kwepaperpicker](https://gitlab.com/theblackdon/qs-kwepaperpicker), packaged here as `wallpaperpicker`, a swatch-deck wallpaper picker for Quickshell. Brings its own icon font, and on KDE Plasma hands the chosen wallpaper to Plasma by default. `wallpaperpicker-nixgl` is the same picker for Nix on other distros. See [wallpaperpicker](#wallpaperpicker) below. GPL-3.0-or-later.
 - **[`flow-desktop`](./flow-desktop)** — [Flow Desktop](https://github.com/Flow-Tube/Flow-Desktop), a privacy-respecting YouTube and YouTube Music client (Tauri 2), built from source. Based on [olafkfreund/nixos-FlowTube](https://github.com/olafkfreund/nixos-FlowTube)'s package, tracking upstream main, plus a local patch that adds thumbnail previews to the seekbar. GPL-3.0.
-- **[`photo2scan`](./photo2scan)** — turns phone photos of paper pages into a scanned-looking PDF: finds the page, undoes the camera angle, evens out the lighting. Handy for forms someone photographed at an angle and sent you. Also a [web page](https://danieltallon.github.io/nix-packages/photo2scan/) that works on Windows, Linux and phones with nothing to install. See [photo2scan](#photo2scan) below. Own project, MIT licensed.
+- **[`photo2scan`](./photo2scan)** — turns phone photos of paper pages into a scanned-looking PDF: finds the page, undoes the camera angle, evens out the lighting. Handy for forms someone photographed at an angle and sent you. Also a [web page](https://danieltallon.github.io/nix-packages/photo2scan/) that works on Windows, Linux and phones with nothing to install, and also takes existing PDFs. See [photo2scan](#photo2scan) below. Own project, MIT licensed.
 
 Each package is exposed on its own — installing or building one never pulls in the others.
 
@@ -266,15 +266,21 @@ Wineland 11.0-20260930 and newer restores DLSS, frame generation, ray tracing an
 ### On the web (any computer, including Windows)
 
 Open **<https://danieltallon.github.io/nix-packages/photo2scan/>**, click
-**Choose photos…**, drag any blue corner the page finder got wrong, set the look (gray, black and
+**Choose files…** (photos or PDFs), drag any blue corner the page finder got wrong, set the look (gray, black and
 white or color, plus **Lighter / darker** and **Contrast** sliders, like a
-scanner's; double-click a slider to reset it), and click **Save PDF**. Everything runs in the browser; photos are never uploaded. It is
+scanner's; double-click a slider to reset it), and click **Save PDF**. Everything runs in the browser; files are never uploaded. It is
 one self-contained file, [`photo2scan/web/index.html`](./photo2scan/web/index.html),
 so it also works opened straight from disk, offline for JPEG and PNG. HEIC photos
 (the iPhone default) work too: the first time one is added, the page fetches a
 HEIC decoder ([heic-to](https://github.com/hoppergee/heic-to), libheif, about
 3 MB) from jsDelivr, pinned to a version and checked by hash. Safari decodes HEIC
 itself and skips the download.
+
+PDFs work the same way: each page becomes its own page card with corners to
+drag, and is straightened and cleaned like a photo. That suits PDFs a phone made
+from a photo, or an old scan that needs evening out. The first PDF fetches
+[pdf.js](https://mozilla.github.io/pdf.js/) (about 500 KB), also pinned and
+checked by hash. Password-protected PDFs aren't supported.
 
 The `pages` workflow publishes it whenever that file changes on `main`. It needs
 **Settings → Pages → Source: GitHub Actions** set once on the repository.

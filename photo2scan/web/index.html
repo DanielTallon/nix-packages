@@ -87,11 +87,12 @@
 <main>
   <h1>photo2scan</h1>
   <p class="lede">Turn phone photos of paper pages into a straightened, scanned-looking PDF.
-    Everything happens in this browser; your photos are never uploaded.</p>
+    PDFs work too: each of their pages is straightened and cleaned the same way.
+    Everything happens in this browser; your files are never uploaded.</p>
 
   <div class="toolbar">
-    <button id="pick" class="primary">Choose photos…</button>
-    <input id="files" type="file" accept="image/*,.heic,.heif" multiple hidden>
+    <button id="pick" class="primary">Choose files…</button>
+    <input id="files" type="file" accept="image/*,.heic,.heif,application/pdf,.pdf" multiple hidden>
     <label>Look
       <select id="mode">
         <option value="gray">Gray</option>
@@ -121,7 +122,7 @@
   </div>
   <div id="status"></div>
 
-  <div id="drop">Drop photos here, or use <strong>Choose photos…</strong>.<br>
+  <div id="drop">Drop photos or PDFs here, or use <strong>Choose files…</strong>.<br>
     Pages appear in the order you add them; use the arrows to reorder.</div>
   <div id="pages"></div>
 
@@ -299,11 +300,14 @@ function findPage(bitmap) {
 }
 
 // The bright area can include things touching the page, like a notebook's
-// spiral rings. For each side, try lines at different inward offsets at each
-// end (so they can tilt) and keep the one that is most often a real paper
-// edge: solid paper just inside, darker background just outside.
+// spiral rings, or miss a corner when the page fills the photo. For each side,
+// try lines at different offsets at each end (so they can tilt) and keep the
+// one that is most often a real paper edge: solid paper just inside, darker
+// background (or the photo's border) just outside.
 function refineEdges(quad, bright, w, h) {
-  const [qw, qh] = pageSize(quad), maxOff = Math.round(0.1 * Math.min(qw, qh));
+  // Sides may move in by up to 10% of the page (not far enough to reach a table
+  // line inside a form) or out by up to 20%.
+  const [qw, qh] = pageSize(quad), maxIn = Math.round(0.1 * Math.min(qw, qh)), maxOut = 2 * maxIn;
   const at = (x, y) => {
     const xi = Math.round(x), yi = Math.round(y);
     return xi >= 0 && yi >= 0 && xi < w && yi < h ? bright[yi * w + xi] : 0;
@@ -318,20 +322,22 @@ function refineEdges(quad, bright, w, h) {
       const ok = d => at(x + d * n[0], y + d * n[1]);
       return ok(2) && ok(4) && ok(6) && !ok(-2) && !ok(-4) ? 1 : 0;
     };
-    // edges[o][k]: sample k along the side, offset o (shifted by 6 so the side
-    // can also move slightly outward).
+    // edges[o + maxOut][k]: sample k along the side, offset o (negative is outward).
     const us = Array.from({ length: SAMPLES }, (_, k) => 0.1 + 0.8 * k / (SAMPLES - 1));
     const edges = [];
-    for (let o = -6; o <= maxOff; o++) edges.push(us.map(u => edgeAt(u, o)));
+    for (let o = -maxOut; o <= maxIn; o++) edges.push(us.map(u => edgeAt(u, o)));
     let best = -1, bestO = [0, 0];
-    for (let o1 = -6; o1 <= maxOff; o1++)
-      for (let o2 = -6; o2 <= maxOff; o2++) {
+    for (let o1 = -maxOut; o1 <= maxIn; o1++)
+      for (let o2 = -maxOut; o2 <= maxIn; o2++) {
         let s = 0;
         for (let k = 0; k < SAMPLES; k++) {
           const o = Math.round(o1 + (o2 - o1) * us[k]);
-          s += edges[o + 6][k];
+          s += edges[o + maxOut][k];
         }
-        if (s > best) { best = s; bestO = [o1, o2]; }
+        // On a tie, move the side as little as possible.
+        if (s > best || (s === best && Math.abs(o1) + Math.abs(o2) < Math.abs(bestO[0]) + Math.abs(bestO[1]))) {
+          best = s; bestO = [o1, o2];
+        }
       }
     // Too few edge hits means no clear edge; keep the side where it was.
     if (best < SAMPLES * 0.25) bestO = [0, 0];
@@ -551,23 +557,27 @@ const pages = [];
 const status = msg => { $("status").textContent = msg; };
 const tick = () => new Promise(r => setTimeout(r, 0));
 
-// Most browsers can't decode HEIC (the iPhone's default format), so a HEIC
-// decoder (libheif, about 3 MB) is fetched the first time one is added.
+// Libraries for HEIC and PDF are fetched from jsDelivr the first time they're
+// needed, pinned to a version and checked by hash.
+const loaded = new Map();
+function loadLib(lib) {
+  if (!loaded.has(lib)) loaded.set(lib, new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    Object.assign(script, { src: lib.src, integrity: lib.integrity, type: lib.type || "", crossOrigin: "anonymous" });
+    script.onload = () => resolve(window[lib.global]);
+    script.onerror = () => { loaded.delete(lib); reject(new Error(`couldn't download the ${lib.what} (no internet?)`)); };
+    document.head.appendChild(script);
+  }));
+  return loaded.get(lib);
+}
+
+// Most browsers can't decode HEIC (the iPhone's default format), so use
+// libheif (about 3 MB).
 const HEIC_LIB = {
   src: "https://cdn.jsdelivr.net/npm/heic-to@1.6.6/dist/iife/heic-to.js",
   integrity: "sha384-ZUCbebcZz1ccUd6VJI4E3dszgWBQOaMQYQ2Tfh7zp+LY0Wf15c9USciIQPWwXRSC",
+  global: "HeicTo", what: "HEIC decoder",
 };
-let heicLib = null;
-function loadHeicLib() {
-  heicLib ||= new Promise((resolve, reject) => {
-    const script = document.createElement("script");
-    Object.assign(script, HEIC_LIB, { crossOrigin: "anonymous" });
-    script.onload = () => resolve(window.HeicTo);
-    script.onerror = () => { heicLib = null; reject(new Error("couldn't download the HEIC decoder (no internet?)")); };
-    document.head.appendChild(script);
-  });
-  return heicLib;
-}
 
 const isHeicName = file => /\.(heic|heif)$/i.test(file.name) || /^image\/hei[cf]/.test(file.type);
 
@@ -578,33 +588,99 @@ async function openImage(file) {
     if (!isHeicName(file)) throw e;
   }
   // Safari decodes HEIC itself; elsewhere use libheif.
-  if (!heicLib) { status(`Loading HEIC support (one-time, about 3 MB)…`); await tick(); }
-  const HeicTo = await loadHeicLib();
+  if (!loaded.has(HEIC_LIB)) { status(`Loading HEIC support (one-time, about 3 MB)…`); await tick(); }
+  const HeicTo = await loadLib(HEIC_LIB);
   status(`Opening ${file.name}…`);
   return HeicTo({ blob: file, type: "bitmap" });
 }
 
+// PDFs are drawn page by page with pdf.js (about 500 KB). Its worker can't be
+// loaded with a hash check, so it's fetched with one and run from a blob.
+const PDFJS = "https://cdn.jsdelivr.net/npm/pdfjs-dist@6.4.299/";
+const PDF_LIB = {
+  src: PDFJS + "build/pdf.min.mjs", type: "module",
+  integrity: "sha384-QCvhu/UPp22U/TNLVbQNONL82ES2yY717GAiqP9VVu37Y7+m9VPKvadGx9XlFvcp",
+  global: "pdfjsLib", what: "PDF reader",
+};
+const PDF_WORKER = {
+  src: PDFJS + "build/pdf.worker.min.mjs",
+  integrity: "sha384-NfW/OTMWezITv4oaALvfH7MFLwzPxEvpySmDpoALa1mtTY8MC200l0ZNFD+SOlrM",
+};
+const PDF_SIDE = 3300;  // long side of a drawn PDF page: Letter at 300 dpi
+
+let pdfLib = null;
+function loadPdfLib() {
+  pdfLib ||= (async () => {
+    const [lib, worker] = await Promise.all([
+      loadLib(PDF_LIB),
+      fetch(PDF_WORKER.src, { integrity: PDF_WORKER.integrity }).then(r => r.ok ? r.arrayBuffer() : Promise.reject())
+        .catch(() => Promise.reject(new Error("couldn't download the PDF reader (no internet?)"))),
+    ]);
+    lib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(new Blob([worker], { type: "text/javascript" }));
+    return lib;
+  })();
+  pdfLib.catch(() => { pdfLib = null; });
+  return pdfLib;
+}
+
+const isPdf = file => /\.pdf$/i.test(file.name) || file.type === "application/pdf";
+
+// Yields [page number, page count, bitmap] for each page of a PDF.
+async function* pdfPages(file) {
+  if (!pdfLib) { status(`Loading PDF support (one-time, about 500 KB)…`); await tick(); }
+  const pdfjsLib = await loadPdfLib();
+  const task = pdfjsLib.getDocument({
+    data: await file.arrayBuffer(),
+    wasmUrl: PDFJS + "wasm/", standardFontDataUrl: PDFJS + "standard_fonts/", cMapUrl: PDFJS + "cmaps/",
+  });
+  try {
+    const doc = await task.promise.catch(e => {
+      throw e.name === "PasswordException" ? new Error("it's password-protected") : e;
+    });
+    for (let n = 1; n <= doc.numPages; n++) {
+      status(`Reading ${file.name}, page ${n} of ${doc.numPages}…`); await tick();
+      const page = await doc.getPage(n);
+      const size = page.getViewport({ scale: 1 });
+      const viewport = page.getViewport({ scale: PDF_SIDE / Math.max(size.width, size.height) });
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(viewport.width);
+      canvas.height = Math.round(viewport.height);
+      await page.render({ canvas, viewport }).promise;
+      page.cleanup();
+      yield [n, doc.numPages, await createImageBitmap(canvas)];
+    }
+  } finally {
+    task.destroy();
+  }
+}
+
+function addPage(name, bitmap) {
+  const found = findPage(bitmap);
+  const page = { name, bitmap, corners: found || defaultCorners(bitmap), missed: !found };
+  page.detected = page.corners.map(c => [...c]);
+  pages.push(page);
+  buildCard(page);
+  renderPreview(page);
+  $("save").disabled = false;
+  $("drop").hidden = true;
+}
+
 async function addFiles(files) {
-  const list = [...files].filter(f => f.type.startsWith("image/") || isHeicName(f));
+  const list = [...files].filter(f => f.type.startsWith("image/") || isHeicName(f) || isPdf(f));
+  const failed = [];
   for (const file of list) {
     status(`Opening ${file.name}…`); await tick();
-    let bitmap;
     try {
-      bitmap = await openImage(file);
+      if (isPdf(file)) {
+        for await (const [n, count, bitmap] of pdfPages(file)) addPage(count > 1 ? `${file.name}, page ${n}` : file.name, bitmap);
+      } else {
+        addPage(file.name, await openImage(file));
+      }
     } catch (e) {
-      status(`Couldn't open ${file.name}` + (isHeicName(file) ? `: ${e.message || e}` : "."));
-      continue;
+      failed.push(`Couldn't open ${file.name}` + (isHeicName(file) || isPdf(file) ? `: ${String(e.message || e).replace(/\.$/, "")}.` : "."));
     }
-    const found = findPage(bitmap);
-    const page = { name: file.name, bitmap, corners: found || defaultCorners(bitmap), missed: !found };
-    page.detected = page.corners.map(c => [...c]);
-    pages.push(page);
-    buildCard(page);
-    renderPreview(page);
   }
-  $("save").disabled = pages.length === 0;
-  $("drop").hidden = pages.length > 0;
-  if (list.length) status(`${pages.length} page${pages.length === 1 ? "" : "s"} ready.`);
+  if (list.length) status([`${pages.length} page${pages.length === 1 ? "" : "s"} ready.`, ...failed].join(" "));
 }
 
 function buildCard(page) {
@@ -621,7 +697,7 @@ function buildCard(page) {
     </div>
     <div class="note" hidden>Couldn't find the page edges. Drag the blue corners onto the page's corners.</div>
     <div class="page-body">
-      <div class="pane"><span>Photo: drag the corners</span><canvas class="photo"></canvas></div>
+      <div class="pane"><span>Original: drag the corners</span><canvas class="photo"></canvas></div>
       <div class="pane"><span>Result</span><canvas class="result"></canvas></div>
     </div>`;
   page.card = card;
