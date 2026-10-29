@@ -91,7 +91,7 @@
 
   <div class="toolbar">
     <button id="pick" class="primary">Choose photos…</button>
-    <input id="files" type="file" accept="image/*" multiple hidden>
+    <input id="files" type="file" accept="image/*,.heic,.heif" multiple hidden>
     <label>Look
       <select id="mode">
         <option value="gray">Gray</option>
@@ -551,16 +551,48 @@ const pages = [];
 const status = msg => { $("status").textContent = msg; };
 const tick = () => new Promise(r => setTimeout(r, 0));
 
+// Most browsers can't decode HEIC (the iPhone's default format), so a HEIC
+// decoder (libheif, about 3 MB) is fetched the first time one is added.
+const HEIC_LIB = {
+  src: "https://cdn.jsdelivr.net/npm/heic-to@1.6.6/dist/iife/heic-to.js",
+  integrity: "sha384-ZUCbebcZz1ccUd6VJI4E3dszgWBQOaMQYQ2Tfh7zp+LY0Wf15c9USciIQPWwXRSC",
+};
+let heicLib = null;
+function loadHeicLib() {
+  heicLib ||= new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    Object.assign(script, HEIC_LIB, { crossOrigin: "anonymous" });
+    script.onload = () => resolve(window.HeicTo);
+    script.onerror = () => { heicLib = null; reject(new Error("couldn't download the HEIC decoder (no internet?)")); };
+    document.head.appendChild(script);
+  });
+  return heicLib;
+}
+
+const isHeicName = file => /\.(heic|heif)$/i.test(file.name) || /^image\/hei[cf]/.test(file.type);
+
+async function openImage(file) {
+  try {
+    return await createImageBitmap(file, { imageOrientation: "from-image" });
+  } catch (e) {
+    if (!isHeicName(file)) throw e;
+  }
+  // Safari decodes HEIC itself; elsewhere use libheif.
+  if (!heicLib) { status(`Loading HEIC support (one-time, about 3 MB)…`); await tick(); }
+  const HeicTo = await loadHeicLib();
+  status(`Opening ${file.name}…`);
+  return HeicTo({ blob: file, type: "bitmap" });
+}
+
 async function addFiles(files) {
-  const list = [...files].filter(f => f.type.startsWith("image/") || /\.(heic|heif)$/i.test(f.name));
+  const list = [...files].filter(f => f.type.startsWith("image/") || isHeicName(f));
   for (const file of list) {
     status(`Opening ${file.name}…`); await tick();
     let bitmap;
     try {
-      bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
-    } catch {
-      status(`Couldn't open ${file.name}.` + (/\.(heic|heif)$/i.test(file.name)
-        ? " This browser can't read HEIC photos; ask the sender to send JPEG, or open it in Safari." : ""));
+      bitmap = await openImage(file);
+    } catch (e) {
+      status(`Couldn't open ${file.name}` + (isHeicName(file) ? `: ${e.message || e}` : "."));
       continue;
     }
     const found = findPage(bitmap);
