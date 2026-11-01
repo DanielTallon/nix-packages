@@ -50,6 +50,15 @@ stdenvNoCC.mkDerivation (finalAttrs: {
       --replace-fail 'property string wallpaperCommand: root.kineticwe ? root.kineticweCommand : ""' \
                      'property string wallpaperCommand: root.kineticwe ? root.kineticweCommand : root.plasma ? root.plasmaCommand : ""'
 
+    # settings.json is shared by every session, so a Plasma command saved
+    # there would also run outside Plasma (e.g. under Niri), where it fails
+    # and the wallpaper never changes. Outside Plasma, ignore it and draw
+    # the wallpaper with Quickshell instead.
+    substituteInPlace services/WallpaperEngine.qml \
+      --replace-fail 'readonly property string command: SettingsConfig.wallpaperCommand.trim()' \
+                     'readonly property string savedCommand: SettingsConfig.wallpaperCommand.trim()
+    readonly property string command: !SettingsConfig.plasma && savedCommand.startsWith("plasma-apply-wallpaperimage") ? "" : savedCommand'
+
     substituteInPlace colors/Colors.qml \
       --replace-fail 'Quickshell.shellPath("colors/Colors.json")' \
                      'Quickshell.env("WALLPAPERPICKER_STATE") + "/colors/Colors.json"'
