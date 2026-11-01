@@ -109,6 +109,7 @@ let
             self.store: Path | None = None
             self.inputs: dict[str, Path] = {}
             self._files: list[Path] | None = None
+            self.config: Config | None = None  # where it came from, for asking Nix about it (main() sets it)
             if path:
                 p = Path(re.sub(r"^(path:|git\+file://)", "", path)).expanduser()
                 if p.is_dir():
@@ -373,6 +374,7 @@ let
         cause: Report | None = None
         source: str = ""
         saved_to: Path | None = None
+        whose: str = ""  # who it is, when the location doesn't say (an upstream module you turn on in your files)
 
 
     def analyze(text: str, flake: Flake, rules: list[Rule], scope: str = "error") -> Report:
@@ -1824,6 +1826,11 @@ let
     # the new NVIDIA tools can't talk to the old kernel module, which stays loaded until a reboot
     DRIVER_MISMATCH_RE = re.compile(r"Driver/library version mismatch|NVRM: API mismatch")
     NVML_VERSION_RE = re.compile(r"NVML library version: (?P<v>[\d.]+)")
+    # it ran before the network was up (typically a timer catching up right after boot)
+    NETWORK_RE = re.compile(r"[Cc]ould not resolve host|Temporary failure in name resolution|Name or service not known|"
+                            r"Network is unreachable|No route to host|getaddrinfo")
+    # what reproduce() writes for a unit that was failed when the switch ended but has restarted fine since
+    RECOVERED_RE = re.compile(r"failed at (?P<failed>[\d.]+), then restarted fine at (?P<ok>[\d.]+)")
 
 
     def loaded_nvidia_version() -> str:
@@ -1856,12 +1863,13 @@ let
         return explain, fix
 
 
-    def unit_journal(unit: str, user: bool, text: str) -> list[tuple[float | None, str, str]]:
-        """(time, who, message) for the unit's last run: from the journal, else from `systemctl status` in the text."""
+    def unit_journal(unit: str, user: bool, text: str, until: float | None = None) -> list[tuple[float | None, str, str]]:
+        """(time, who, message) for the unit's last run (before `until`): from the journal, else from
+        `systemctl status` in the text."""
         entries: list[tuple[float | None, str, str]] = []
         try:
             out = run(["journalctl", "-b", "--user-unit" if user else "-u", unit, "-n", "60", "--no-pager",
-                       "-o", "short-unix"], timeout=10).stdout
+                       "-o", "short-unix", *(["--until", f"@{until:.6f}"] if until else [])], timeout=10).stdout
             entries = [(float(m["ts"]), m["ident"], m["msg"]) for m in UNIX_JOURNAL_RE.finditer(out)]
         except (OSError, subprocess.TimeoutExpired):
             pass
@@ -1911,6 +1919,40 @@ let
         return "", ""
 
 
+    def unit_defined_in(flake: Flake, kind: str, name: str) -> list[Origin]:
+        """The files that define a unit, asked of your config itself: finds a module's unit even when its name doesn't
+        match the option that turns it on (nix-flatpak's `flatpak-managed-install-timer`, for `services.flatpak`)."""
+        cfg = flake.config
+        if not cfg or not cfg.kind:
+            return []
+        opt = f"options.{kind}.definitionsWithLocations"
+        pick = f"ds: map (d: d.file) (builtins.filter (d: d.value ? {json.dumps(name)}) ds)"
+        if cfg.kind == "flake":
+            cmd = ["nix", "--extra-experimental-features", "nix-command flakes", "eval", "--json",
+                   f'{cfg.ref}#nixosConfigurations."{cfg.host}".{opt}', "--apply", pick]
+        else:
+            cmd = ["nix-instantiate", "--eval", "--strict", "--json", "-E",
+                   f"({pick}) (import <nixpkgs/nixos> {{ configuration = /. + {json.dumps(cfg.ref)}; }}).{opt}"]
+        try:
+            files = json.loads(run_with_timer(cmd, "Looking up where the unit comes from").stdout)
+        except (OSError, ValueError):
+            return []
+        # a flake-parts module reads `/nix/store/…/foo.nix, via option flake.modules.nixos.foo`
+        return [flake.origin(f.split(", via option ")[0]) for f in files if isinstance(f, str)]
+
+
+    def module_switch(src: str) -> str | None:
+        """The option a module's settings hang on: `services.foo` from `cfg = config.services.foo` (with `.enable` if
+        it's `mkIf cfg.enable` or `mkIf config.services.foo.enable`), else from `mkIf config.services.foo.enable`.
+        `cfg` comes first: a unit can also sit behind a broader switch (nixpkgs' nix-gc is `mkIf config.nix.enable`)."""
+        if m := re.search(r"\bcfg\s*=[^;]*?\bconfig\.([\w.-]+)\s*;", src):
+            on = re.search(rf"\bmkIf\s+\(?\s*(?:cfg|config\.{re.escape(m[1])})\.enable\b", src)
+            return m[1] + (".enable" if on else "")
+        if m := re.search(r"\bmkIf\s+\(?\s*config\.([\w.-]+)\.enable\b", src):
+            return m[1] + ".enable"
+        return None
+
+
     def h_unit(rep: Report, vars: dict, flake: Flake, rules, text: str) -> None:
         """A unit in a failed state after switching: its log, why it failed, where you define it, and when it failed."""
         unit = vars.get("unit") or re.split(r"[,\s]+", vars.get("units", "").strip())[0]
@@ -1920,8 +1962,10 @@ let
         base, suffix = (base, suffix) if suffix in UNIT_KINDS else (unit, "service")
         rep.said_by, rep.log_label = "systemd", f"{unit}'s log"
 
-        # why: systemd's own lines from its last run (or `systemctl status` output pasted in)
-        entries = unit_journal(unit, user, text)
+        # why: systemd's own lines from its last run (or `systemctl status` output pasted in); for a unit that has
+        # restarted fine since, the run that failed
+        recovered = RECOVERED_RE.search(text)
+        entries = unit_journal(unit, user, text, float(recovered["ok"]) - 0.001 if recovered else None)
         said = [f"{msg}" for _, who, msg in entries if who == "systemd" and (UNIT_EXIT_RE.search(msg) or UNIT_RESULT_RE.search(msg))]
         ownlines = [msg for _, who, msg in entries if who != "systemd"]
         rep.log_tail = ownlines[-15:]
@@ -1934,14 +1978,19 @@ let
         why, todo = unit_reason(ex["code"] if ex else "", ex["status"] if ex else "", (ex["sname"] or "") if ex else "",
                                 res["result"] if res else "", STORE_HASH_RE.sub("…/", exe))
 
-        # where: your own `systemd.services.foo`, else a module you enabled
+        # where: your own `systemd.services.foo`, else a module you turn on. Your config says which files define the
+        # unit; the name only guesses (a module's unit can be named anything, and `systemd.services = { foo = …` hides it).
         kind = ("systemd.user." if user else "systemd.") + UNIT_KINDS[suffix]
+        plain = base.split("@")[0] + ("@" if "@" in base else "")
         name = re.escape(base.split("@")[0])
         defined = flake.find([rf'\b{re.escape(kind)}\.(?:"{name}"|{name})(?![\w-])'], regex=True)
-        enabled = None if defined else flake.find(
-            [rf"\b(?:services|programs)\.{name}\.enable\s*=\s*true\b", rf"\b(?:services|programs)\.{name}\s*=\s*\{{"], regex=True)
+        origins = unit_defined_in(flake, kind, plain)
+        if not defined and (mine := next((o for o in origins if o.owner == "you"), None)):
+            lines = read_lines(mine.real)
+            line = next((i + 1 for i, l in enumerate(lines) if re.search(rf'(?:"{name}@?"|\b{name})\s*=', l.split("#")[0])), None)
+            defined = Loc(mine, line)
         exec_line = None
-        if defined:
+        if defined and defined.line:
             # Stay inside its `{ … }`, by brackets rather than indentation (blocks aren't always indented).
             lines = read_lines(defined.origin.real)
             depth = len(open_at(lines, defined.line, 1))
@@ -1951,9 +2000,27 @@ let
                 if re.search(r"\b(?:ExecStart|script|preStart)\s*=", lines[i].split("#")[0]):
                     exec_line = i + 1
                     break
+        # A module makes it, unless you replace the command it runs: then it's yours.
+        mod = None if exec_line else next((o for o in origins if o.owner == "upstream"), None)
+        opt = on = None
+        if mod:
+            opt = module_switch("\n".join(read_lines(mod.real)))
+            group = opt.removesuffix(".enable") if opt else ""
+            needles = [rf"\b{re.escape(opt)}\s*=\s*true\b",
+                       # `services.foo = {`, but not a bare `nix = {` (too common inside other settings)
+                       *([rf"\b{re.escape(group)}\s*=\s*\{{"] if "." in group else []),
+                       rf"\b{re.escape(opt)}\b"] if opt else []
+            # else (or not found) the line that brings the module in: `inputs.nix-flatpak.nixosModules.…`
+            needles.append(rf"\binputs\.{re.escape(mod.label.split('/')[-1])}\.\w*[Mm]odules\b")
+            on = flake.find(needles, regex=True)
+            rep.loc, rep.blame = on or defined, "upstream"
+            rep.whose = mod.label + (f", which you turn on in {on.origin.display}" if on else "")
+        elif defined:
             rep.loc = Loc(defined.origin, exec_line) if exec_line else defined
             rep.blame = "you"
-        elif enabled:
+        enabled = None if defined or mod else flake.find(
+            [rf"\b(?:services|programs)\.{name}\.enable\s*=\s*true\b", rf"\b(?:services|programs)\.{name}\s*=\s*\{{"], regex=True)
+        if enabled:
             rep.loc = enabled
 
         # when: during the switch you just piped in, during your last switch, or earlier
@@ -1965,9 +2032,14 @@ let
             switched = None
         in_switch = bool(re.search(r"the following units failed:", text))
         # systemd doesn't know it, and neither your config nor the switch you piped in mention it
-        leftover = load == "not-found" and not (in_switch or defined or enabled)
+        leftover = load == "not-found" and not (in_switch or defined or enabled or mod)
         recent = ""
-        if in_switch:
+        if recovered:
+            recent = (f"It failed at {when(float(recovered['failed']))} and was still failed when your last switch "
+                      f"ended ({when(switched)}), so the switch reported it. systemd restarted it at "
+                      f"{when(float(recovered['ok']))} and it ran fine, so it's working now; the next switch won't "
+                      "report it unless it fails again.")
+        elif in_switch:
             recent = "It failed while switching to your new config."
         elif leftover:
             recent = (f"Its unit file no longer exists: it's left over from an earlier generation, and has nothing to do "
@@ -1979,8 +2051,16 @@ let
 
         explain = f"Your config built fine, but the {'user ' if user else '''}service `{unit}` failed"
         explain += f": {why}" if why else "."
-        if defined:
-            explain += f" You define it yourself, on line {defined.line} of {defined.origin.display}."
+        at = lambda l: f"line {l.line} of {l.origin.display}" if l.line else l.origin.display
+        if mod:
+            made = f"{mod.label}'s {mod.display.split(': ', 1)[-1]}"
+            explain += (f" It isn't written in your files: {made} makes it, for `{opt}`, which you set on {at(on)}." if opt and on else
+                        f" It isn't written in your files: {made} makes it, a module you bring in on {at(on)}." if on else
+                        f" It isn't written in your files: {made} makes it.")
+            if defined:
+                explain += f" You add your own settings to it on {at(defined)}."
+        elif defined:
+            explain += f" You define it yourself, on {at(defined)}."
         elif enabled:
             explain += (f" It isn't written in your files: it comes from the NixOS module you turn on on line {enabled.line} "
                         f"of {enabled.origin.display}.")
@@ -2003,12 +2083,24 @@ let
         fix = []
         if leftover:
             fix.append(f"Clear the old failure:\n    sudo systemctl reset-failed {unit}")
+        elif not user and NETWORK_RE.search("\n".join(ownlines)):
+            # nothing wrong with the service: it ran before the network was up
+            vars["explain_text"] += ("\n\nIt couldn't reach the network: it started before your connection was up. "
+                                     "That's typical of a timer with `Persistent=true` catching up on a missed run "
+                                     "right after boot.")
+            attr = base if re.fullmatch(r"[A-Za-z_][\w-]*", base) else f'"{base}"'
+            fix.append(f"Make it wait for the network:\n    {kind}.{attr} = {{\n"
+                       f"      wants = [ \"network-online.target\" ];\n"
+                       f"      after = [ \"network-online.target\" ];\n    }};")
+            fix.append(f"Full log:\n    journalctl -b {jflag} {unit}")
         else:
             if defined and exec_line:
                 fix.append(f"Look at line {exec_line} of {defined.origin.display}, the command the service runs. {todo}".strip())
             elif todo:
                 fix.append(todo)
-            if defined:
+            if mod and opt and on:
+                fix.append(f"If you don't need what it does, turn off `{opt}` ({at(on)}).")
+            elif defined:
                 fix.append("If you're not sure the service is needed, remove it or set `wantedBy = [ ];` so it doesn't start.")
             fix.append(f"Full log:\n    journalctl -b {jflag} {unit}")
         vars["fix_text"] = "\n\n".join(fix)
@@ -2140,7 +2232,46 @@ let
             also = "".join(f"\nalso failed: {u}" for _, u in units if u != unit)
             return (f"error: {scope}unit {unit} failed{also}\n", how + f"; it builds, so checked the failed unit {unit}",
                     "")
+        if found := recovered_unit():
+            scope, unit, failed_at, ok_at = found
+            return (f"error: {scope}unit {unit} failed at {failed_at:.6f}, then restarted fine at {ok_at:.6f}\n",
+                    how + f"; it builds, so checked the journal: {unit} failed during your last switch", "")
         return None, how, note
+
+
+    def recovered_unit() -> tuple[str, str, float, float] | None:
+        """A unit that was failed when your last switch ended, so the switch reported it, but that systemd has
+        restarted fine since (Restart=on-failure), so `systemctl --failed` no longer lists it:
+        (scope, unit, when it failed, when the run that worked started)."""
+        try:
+            switched = os.lstat("/run/current-system").st_mtime
+        except OSError:
+            return None
+        found = None
+        for scope, args, field in (("", ["_PID=1"], "UNIT"), ("user ", ["--user", "-t", "systemd"], "USER_UNIT")):
+            try:
+                out = run(["journalctl", "-b", *args, "-o", "json", f"--output-fields={field},MESSAGE",
+                           "--since", f"@{switched - 3600:.0f}", "--no-pager"], timeout=10).stdout
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+            failed: dict[str, float] = {}
+            for line in out.splitlines():
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                unit, msg = e.get(field), e.get("MESSAGE")
+                if not isinstance(unit, str) or not isinstance(msg, str):
+                    continue
+                ts = int(e["__REALTIME_TIMESTAMP"]) / 1e6
+                if UNIT_RESULT_RE.search(msg):
+                    failed[unit] = ts
+                elif msg.startswith("Starting ") and unit in failed:
+                    # still failed when the switch ended, and restarted after it
+                    if failed[unit] <= switched + 5 and ts >= switched - 5 and (not found or ts > found[3]):
+                        found = (scope, unit, failed[unit], ts)
+                    del failed[unit]
+        return found
 
 
     def failed_build(drvs: list[str]) -> tuple[str | None, list[float]]:
@@ -2263,7 +2394,7 @@ let
         color, label, sub = BLAME[rep.blame]
         print()
         print(c("1", f"✗ {rep.title}"))
-        print(f"  {c('2', 'Whose:')} {c(color + ';1', label)} {c('2', '— ' + (rep.loc.origin.label if rep.blame == 'upstream' and rep.loc and rep.loc.origin.owner != 'you' else sub))}")
+        print(f"  {c('2', 'Whose:')} {c(color + ';1', label)} {c('2', '— ' + (rep.whose or (rep.loc.origin.label if rep.blame == 'upstream' and rep.loc and rep.loc.origin.owner != 'you' else sub)))}")
         if rep.loc:
             print(f"  {c('2', 'Where:')} {rep.loc.describe()}")
         for o in rep.others:
@@ -2401,6 +2532,7 @@ let
                 return 0
 
         flake = Flake(str(cfg.dir) if cfg.dir else None, load_inputs=not args.rule_id and cfg.kind == "flake")
+        flake.config = None if args.rule_id else cfg
         rep = analyze(text, flake, rules)
         rep.source = source
         if args.rule_id:
