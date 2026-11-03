@@ -79,6 +79,7 @@
   .pane span { font-size: 0.85rem; color: var(--muted); }
   .pane canvas { width: 100%; height: auto; background: #0003; border-radius: 6px; }
   .photo { touch-action: none; cursor: crosshair; }
+  .result.signed { touch-action: none; }
   .note { color: var(--danger); font-size: 0.9rem; }
   footer { color: var(--muted); font-size: 0.85rem; margin-top: 32px; }
 </style>
@@ -117,6 +118,8 @@
     <label>File name
       <input id="name" type="text" value="scan.pdf">
     </label>
+    <button id="sig-pick" title="Choose a picture of your signature. A PNG with a clear background works best; a white background is fine too.">Signature…</button>
+    <input id="sig-file" type="file" accept="image/*" hidden>
     <span class="spacer"></span>
     <button id="save" class="primary" disabled>Save PDF</button>
   </div>
@@ -126,7 +129,9 @@
     Pages appear in the order you add them; use the arrows to reorder.</div>
   <div id="pages"></div>
 
-  <footer>Drag the blue corners if a page's outline is off. The result updates when you let go.</footer>
+  <footer>Drag the blue corners if a page's outline is off. The result updates when you let go.
+    To sign a page, use its <strong>Sign</strong> button, then drag the signature into place on the result
+    and drag its bottom-right corner to resize it.</footer>
 </main>
 
 <script>
@@ -543,9 +548,11 @@ function buildPdf(jpegs, paper) {
   return new Blob(parts, { type: "application/pdf" });
 }
 
-async function toJpeg(img) {
+async function toJpeg(img, page) {
   const canvas = new OffscreenCanvas(img.width, img.height);
-  canvas.getContext("2d").putImageData(img, 0, 0);
+  const ctx = canvas.getContext("2d");
+  ctx.putImageData(img, 0, 0);
+  drawSignature(ctx, page, img.width, img.height);
   const blob = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.88 });
   return { bytes: new Uint8Array(await blob.arrayBuffer()), w: img.width, h: img.height };
 }
@@ -693,6 +700,7 @@ function buildCard(page) {
       <button data-act="down" title="Move later">↓</button>
       <button data-act="rotate" title="Rotate the result a quarter turn">Rotate ⟳</button>
       <button data-act="reset" title="Go back to the detected corners">Reset corners</button>
+      <button data-act="sign" title="Put your signature on this page">Sign</button>
       <button data-act="remove">Remove</button>
     </div>
     <div class="note" hidden>Couldn't find the page edges. Drag the blue corners onto the page's corners.</div>
@@ -709,14 +717,23 @@ function buildCard(page) {
     const i = pages.indexOf(page);
     if (act === "up" && i > 0) [pages[i - 1], pages[i]] = [pages[i], pages[i - 1]];
     if (act === "down" && i < pages.length - 1) [pages[i + 1], pages[i]] = [pages[i], pages[i + 1]];
-    if (act === "rotate") { const c = page.corners; page.corners = [c[3], c[0], c[1], c[2]]; renderPreview(page); }
+    if (act === "rotate") {
+      const c = page.corners; page.corners = [c[3], c[0], c[1], c[2]]; renderPreview(page);
+      if (page.sig) placeSignature(page);  // the old spot means nothing on the turned page
+    }
     if (act === "reset") { page.corners = page.detected.map(c => [...c]); drawPhoto(page); renderPreview(page); }
+    if (act === "sign") {
+      if (page.sig) { page.sig = null; drawResult(page); }
+      else if (signature) placeSignature(page);
+      else { signNext = page; $("sig-file").click(); }
+    }
     if (act === "remove") { pages.splice(i, 1); card.remove(); }
     if (act === "up" || act === "down") for (const p of pages) $("pages").appendChild(p.card);
     $("save").disabled = pages.length === 0;
     $("drop").hidden = pages.length > 0;
   });
   setupDrag(page, card.querySelector(".photo"));
+  setupSignatureDrag(page, card.querySelector(".result"));
   $("pages").appendChild(card);
   drawPhoto(page);
 }
@@ -772,10 +789,123 @@ function setupDrag(page, canvas) {
 const look = () => ({ mode: $("mode").value, dark: +$("dark").value, contrast: +$("contrast").value });
 
 function renderPreview(page) {
-  const img = renderPage(page, look(), 1200, 900);
-  const canvas = page.card.querySelector(".result");
+  page.preview = renderPage(page, look(), 1200, 900);
+  drawResult(page);
+}
+
+// Draw the cleaned preview, the signature, and (on screen only) its outline and resize handle.
+function drawResult(page) {
+  const img = page.preview, canvas = page.card.querySelector(".result");
   canvas.width = img.width; canvas.height = img.height;
-  canvas.getContext("2d").putImageData(img, 0, 0);
+  const ctx = canvas.getContext("2d");
+  ctx.putImageData(img, 0, 0);
+  drawSignature(ctx, page, img.width, img.height);
+  canvas.classList.toggle("signed", !!page.sig);
+  page.card.querySelector("[data-act=sign]").textContent = page.sig ? "Remove signature" : "Sign";
+  const box = signatureBox(page, img.width, img.height);
+  if (!box) return;
+  const unit = canvas.width / Math.max(1, canvas.getBoundingClientRect().width || canvas.width);
+  ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue("--handle");
+  ctx.fillStyle = ctx.strokeStyle;
+  ctx.lineWidth = 1.5 * unit;
+  ctx.setLineDash([5 * unit, 4 * unit]);
+  ctx.strokeRect(box.x, box.y, box.w, box.h);
+  ctx.setLineDash([]);
+  const r = 6 * unit;
+  ctx.fillRect(box.x + box.w - r, box.y + box.h - r, 2 * r, 2 * r);
+}
+
+// ---------- signature ----------
+
+// One signature image for the whole session; each page keeps its own placement
+// as fractions of the result's size (x, y of the top left, w of the width), so it
+// lands in the same spot on the full-resolution page as on the preview.
+let signature = null, signNext = null;
+
+function signatureBox(page, w, h) {
+  if (!page.sig || !signature) return null;
+  const bw = page.sig.w * w;
+  return { x: page.sig.x * w, y: page.sig.y * h, w: bw, h: bw * signature.height / signature.width };
+}
+
+function drawSignature(ctx, page, w, h) {
+  const box = signatureBox(page, w, h);
+  if (!box) return;
+  ctx.save();
+  // Multiply keeps the page's lines showing through a white background, and the
+  // signature follows the gray and black-and-white looks without being cleaned.
+  ctx.globalCompositeOperation = "multiply";
+  if (look().mode !== "color") ctx.filter = "grayscale(1)";
+  ctx.drawImage(signature, box.x, box.y, box.w, box.h);
+  ctx.restore();
+}
+
+// Crop the picture to the ink, so the box on the page hugs the signature.
+async function loadSignature(file) {
+  const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
+  const { data, w, h } = sourcePixels(bitmap, Math.max(bitmap.width, bitmap.height));
+  let x0 = w, y0 = h, x1 = -1, y1 = -1;
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      const i = 4 * (y * w + x);
+      if (data[i + 3] > 40 && data[i] + data[i + 1] + data[i + 2] < 600) {
+        if (x < x0) x0 = x; if (x > x1) x1 = x;
+        if (y < y0) y0 = y; if (y > y1) y1 = y;
+      }
+    }
+  if (x1 < 0) throw new Error("no ink found in it");
+  const pad = Math.round(0.02 * Math.max(x1 - x0, y1 - y0));
+  x0 = Math.max(0, x0 - pad); y0 = Math.max(0, y0 - pad);
+  x1 = Math.min(w - 1, x1 + pad); y1 = Math.min(h - 1, y1 + pad);
+  return createImageBitmap(bitmap, x0, y0, x1 - x0 + 1, y1 - y0 + 1);
+}
+
+// Start a signature a quarter of the page wide, centered near the bottom.
+function placeSignature(page) {
+  const { width: w, height: h } = page.preview;
+  const sw = 0.25, sh = sw * w * signature.height / signature.width / h;
+  page.sig = { x: (1 - sw) / 2, y: Math.max(0, 0.85 - sh), w: sw };
+  drawResult(page);
+}
+
+// Drag the signature to move it, or its bottom-right corner to resize it.
+function setupSignatureDrag(page, canvas) {
+  let drag = null;
+  const toResult = e => {
+    const r = canvas.getBoundingClientRect(), k = canvas.width / r.width;
+    return [(e.clientX - r.left) * k, (e.clientY - r.top) * k];
+  };
+  const hit = e => {
+    const box = signatureBox(page, canvas.width, canvas.height);
+    if (!box) return null;
+    const [x, y] = toResult(e), reach = 14 * canvas.width / canvas.getBoundingClientRect().width;
+    if (dist([x, y], [box.x + box.w, box.y + box.h]) < reach) return "resize";
+    if (x >= box.x && x <= box.x + box.w && y >= box.y && y <= box.y + box.h) return "move";
+    return null;
+  };
+  canvas.addEventListener("pointerdown", e => {
+    const kind = hit(e);
+    if (!kind) return;
+    const [x, y] = toResult(e);
+    drag = { kind, dx: x / canvas.width - page.sig.x, dy: y / canvas.height - page.sig.y };
+    canvas.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+  canvas.addEventListener("pointermove", e => {
+    if (!drag) { const kind = hit(e); canvas.style.cursor = kind === "resize" ? "nwse-resize" : kind ? "move" : ""; return; }
+    const [x, y] = toResult(e), W = canvas.width, H = canvas.height, s = page.sig;
+    const aspect = signature.height / signature.width * W / H;  // box height per unit of s.w
+    if (drag.kind === "move") {
+      s.x = Math.max(0, Math.min(1 - s.w, x / W - drag.dx));
+      s.y = Math.max(0, Math.min(1 - s.w * aspect, y / H - drag.dy));
+    } else {
+      s.w = Math.max(0.04, Math.min(x / W - s.x, 1 - s.x, (1 - s.y) / aspect));
+    }
+    drawResult(page);
+  });
+  const end = () => { drag = null; };
+  canvas.addEventListener("pointerup", end);
+  canvas.addEventListener("pointercancel", end);
 }
 
 async function savePdf() {
@@ -794,7 +924,7 @@ async function savePdf() {
     const jpegs = [];
     for (const [i, page] of pages.entries()) {
       status(`Processing page ${i + 1} of ${pages.length}…`); await tick();
-      jpegs.push(await toJpeg(renderPage(page, look(), 4096, 3300)));
+      jpegs.push(await toJpeg(renderPage(page, look(), 4096, 3300), page));
     }
     const pdf = buildPdf(jpegs, $("paper").value);
     if (handle) {
@@ -816,6 +946,23 @@ async function savePdf() {
 
 $("pick").addEventListener("click", () => $("files").click());
 $("files").addEventListener("change", e => { addFiles(e.target.files); e.target.value = ""; });
+$("sig-pick").addEventListener("click", () => { signNext = null; $("sig-file").click(); });
+$("sig-file").addEventListener("change", async e => {
+  const file = e.target.files[0];
+  e.target.value = "";
+  if (!file) return;
+  try {
+    signature = await loadSignature(file);
+  } catch (err) {
+    status(`Couldn't use ${file.name} as a signature` + (err.message === "no ink found in it" ? ": no ink found in it." : "."));
+    return;
+  }
+  $("sig-pick").textContent = "Change signature…";
+  status(`Signature ready. Use a page's Sign button to put it on that page.`);
+  if (signNext && pages.includes(signNext)) placeSignature(signNext);
+  signNext = null;
+  pages.forEach(drawResult);
+});
 $("mode").addEventListener("change", () => {
   $("contrast-label").classList.toggle("off", $("mode").value === "bw");
   $("contrast").disabled = $("mode").value === "bw";
