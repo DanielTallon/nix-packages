@@ -99,9 +99,10 @@
         <option value="gray">Gray</option>
         <option value="bw">Black and white</option>
         <option value="color">Color</option>
+        <option value="original">Original (no scanner effects)</option>
       </select>
     </label>
-    <label title="Double-click to reset">
+    <label id="dark-label" title="Double-click to reset">
       <span>Lighter / darker <output id="dark-value">0</output></span>
       <input id="dark" type="range" min="-50" max="50" step="1" value="0">
     </label>
@@ -448,6 +449,7 @@ function toneCurve(dark, contrast) {
 }
 
 function clean(img, { mode, dark, contrast }) {
+  if (mode === "original") return img;     // straightened only, pixels as photographed
   const { width: w, height: h, data: d } = img, n = w * h;
   const curve = toneCurve(dark, contrast);
   const tone = v => curve[Math.max(0, Math.min(255, Math.round(v)))];
@@ -835,7 +837,7 @@ function drawSignature(ctx, page, w, h) {
   // Multiply keeps the page's lines showing through a white background, and the
   // signature follows the gray and black-and-white looks without being cleaned.
   ctx.globalCompositeOperation = "multiply";
-  if (look().mode !== "color") ctx.filter = "grayscale(1)";
+  if (look().mode === "gray" || look().mode === "bw") ctx.filter = "grayscale(1)";
   ctx.drawImage(signature, box.x, box.y, box.w, box.h);
   ctx.restore();
 }
@@ -964,8 +966,12 @@ $("sig-file").addEventListener("change", async e => {
   pages.forEach(drawResult);
 });
 $("mode").addEventListener("change", () => {
-  $("contrast-label").classList.toggle("off", $("mode").value === "bw");
-  $("contrast").disabled = $("mode").value === "bw";
+  // Contrast means nothing with only black and white; neither slider applies to the original.
+  const mode = $("mode").value, noContrast = mode === "bw" || mode === "original";
+  $("contrast-label").classList.toggle("off", noContrast);
+  $("contrast").disabled = noContrast;
+  $("dark-label").classList.toggle("off", mode === "original");
+  $("dark").disabled = mode === "original";
   pages.forEach(renderPreview);
 });
 // Sliders redraw the previews while dragging, at most one redraw at a time.
