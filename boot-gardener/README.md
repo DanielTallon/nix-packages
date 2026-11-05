@@ -1,6 +1,7 @@
 # Boot Gardener
 
-Pick a NixOS generation, then **pin** it to keep it bootable, **prune** it
+Browse your NixOS generations, then **pick** one to roll back to it, **pin**
+it to keep it bootable, **prune** it
 if it's not currently in the boot menu, or **harvest** it to evict it from
 the boot menu and reclaim its `/boot` space immediately — plus a global
 **garbage-collect** action for orphaned `/boot` files and nix-shell/nix
@@ -11,8 +12,9 @@ can't even run.
 
 Two commands, one file — everything is embedded in `boot-gardener.nix`:
 
-- **`boot-gardener`** — browse your system generations and pin one to the
-  boot menu (bypassing `maxGenerations` garbage collection), prune one that
+- **`boot-gardener`** — browse your system generations, pick one to go back
+  to (like `nixos-rebuild switch --rollback`, for any generation), pin one to
+  the boot menu (bypassing `maxGenerations` garbage collection), prune one that
   isn't in the boot menu, harvest one that is (evict + reclaim its `/boot`
   space on the spot), or garbage-collect boot orphans and nix-shell/nix
   develop leftovers, from a single screen.
@@ -29,7 +31,7 @@ and copies files into `/boot`.
 
 | | Limine | systemd-boot | GRUB |
 |---|---|---|---|
-| Pick, prune, harvest, garbage-collect | ✅ | ✅ | ✅ |
+| Pick (`r`), prune, harvest, garbage-collect | ✅ | ✅ | ✅ |
 | Rescue mode (`boot-gardener rescue`) | ✅ | ✅ | ✅ |
 | Pin (`Enter`) | ✅ | ❌ (see below) | ❌ (see below) |
 
@@ -72,9 +74,9 @@ else; prune/harvest/GC all work exactly the same on all three.
 ### Usage
 
 ```bash
-# Interactively pick a generation. Enter pins it, 'p' prunes it (if not on
-# the bootloader), 'h' harvests it (if on the bootloader), 'g'
-# garbage-collects.
+# Browse your generations. 'r' picks one (rolls back to it), Enter pins it,
+# 'p' prunes it (if not on the bootloader), 'h' harvests it (if on the
+# bootloader), 'g' garbage-collects.
 nix run github:DanielTallon/nix-packages#boot-gardener
 
 # Or run it directly:
@@ -105,10 +107,21 @@ The list shows generation number, date, the commit it was built from
 (`REV`, see [below](#looking-at-a-generations-config)), NixOS/kernel
 version, and a `BOOT` column marking which generations are currently
 referenced in your boot menu (reading `/boot/limine/limine.conf` on Limine, `/boot/loader/entries/`
-on systemd-boot, or `/boot/grub/grub.cfg` on GRUB — all need `sudo` to
-read; you'll be prompted once, up front). A second header line shows
+on systemd-boot, or `/boot/grub/grub.cfg` on GRUB). A second header line shows
 `/boot`'s used/free space and percent-full (`df -h /boot`, no `sudo`
 needed), recomputed on every redraw so it reflects `p`/`h`/`g` immediately.
+
+Browsing the list never asks for a `sudo` password. `/boot` is usually
+root-only, so until you've given `sudo` the password, the `BOOT` column shows
+`?` and a header line says so. Press **`b`** to read the boot menu then, or
+just use an action that needs root (`r`, `p`, `h`, `g`): each one asks for
+the password when you use it and re-reads the boot menu before it checks
+anything. `sudo` remembers the password for a few minutes. After that, the
+`BOOT` column keeps showing the last read, with the time it was taken, until
+you press `b` or use another root action. If `sudo` works without a password
+(NOPASSWD, or you ran `sudo` recently), the column fills in on startup as
+before. The bootloader is detected without root too, from the installer
+script the running system uses.
 
 The `YIELD` column estimates how much Nix store space removing that
 generation would free: the total size of the store paths that *only* that
@@ -146,6 +159,44 @@ the garden. `--no-yield` skips the measuring entirely and the column shows
   list; **Shift-Tab** unmarks one. Marking generations only matters for
   `p`/`h` below — pin/unpin always applies to a single row, and `g` ignores
   selection entirely.
+- **`r`** **picks** the highlighted generation: it makes that generation
+  your system again, like `nixos-rebuild switch --rollback` does for the
+  previous one. It asks whether to `switch` (start using it now) or `boot`
+  (boot into it next time). Then it asks for `sudo` and shows how the boot
+  menu will change (see below), and asks for a typed `yes`. Then it points the
+  system profile at that generation (`nix-env --switch-generation`) and runs
+  the generation's own `switch-to-configuration`, as a transient systemd
+  unit the way `nixos-rebuild` does, so a switch that restarts your desktop
+  can't cut it off. Both modes rewrite the boot menu with that generation as
+  the default, using that generation's own bootloader settings. On Limine,
+  that means the boot menu gets the pins that generation was built with. Pins
+  added later stay in `limine-pins.json` and come back on your next rebuild.
+  Newer generations aren't deleted, and your next rebuild lands on top as a
+  new generation. A different kernel only loads after a reboot. If
+  `switch-to-configuration` fails, it offers to point the profile back where
+  it was. One row at a time; pin rows can't be picked.
+  - **On Limine, pick only switches.** Limine's NixOS installer ignores the
+    system profile's head: it lists the newest N generations by number and
+    always makes the highest-numbered one the default. So `boot` couldn't
+    make an older generation the next boot, and after a `switch` a reboot
+    takes you back to the newest generation unless you choose the picked one
+    in the boot menu. With `remember_last_entry: yes` in your Limine config,
+    choosing it once keeps it chosen. `nixos-rebuild switch --rollback`
+    behaves the same way on Limine. systemd-boot and GRUB make the installed
+    generation the default, so both modes work as described there.
+  - **The boot-menu preview.** The picked generation's installer uses *its*
+    settings. If it was built with a bigger `maxGenerations` (Limine) or
+    `configurationLimit` (systemd-boot, GRUB) than your current config,
+    the boot menu grows, and every added generation's kernel and initrd
+    (specialisations included) gets copied into `/boot`. Before the `yes`,
+    pick lists the generations that would be added to or dropped from the
+    menu, estimates the new `/boot` space, and warns if that's more than
+    `/boot` has free. Installers copy new files before removing old ones, so
+    it all has to fit at once. It also warns when the picked generation is
+    too old to be on the rewritten menu at all (Limine and systemd-boot keep
+    only the newest N). Then you can use it until you reboot, and `boot`
+    is refused. The limits are read from each generation's own installer
+    files, so this needs no extra root access.
 - Pin rows (📌) are listed alongside generation rows, and stick around even
   after their source generation is pruned/GC'd from the system profile —
   pinning captures store paths directly for exactly that reason, so
@@ -199,6 +250,8 @@ the garden. `--no-yield` skips the measuring entirely and the column shows
 - **`c`** opens the **config** a generation (or 📌 pin) was built from — see
   [Looking at a generation's config](#looking-at-a-generations-config).
   Tab-mark two rows first to diff their configs instead.
+- **`b`** reads the boot menu with `sudo` to fill in the `BOOT` column (see
+  above).
 - **`?`** toggles an in-place help panel listing all of the above, without
   leaving the list.
 - **`q`** or **Esc** at the list quits the tool entirely, as does Ctrl-C at
@@ -279,8 +332,8 @@ tuned for brightness contrast rather than hue alone, so it should stay
 readable with color-vision deficiencies.
 
 While the first load runs, a colored ASCII flower garden is shown, with
-anything printed during loading (the `sudo` prompt, the bootloader-detection
-note, `Measuring YIELD...`) appearing underneath it. It's skipped when
+anything printed during loading (the bootloader-detection note,
+`Measuring YIELD...`) appearing underneath it. It's skipped when
 output isn't a terminal.
 
 Two environment variables change this:
@@ -506,8 +559,9 @@ Identical across all three backends:
 
 - NixOS with Limine, systemd-boot, or GRUB as the bootloader
 - `jq`, `fzf` (provided automatically if run via `nix run`)
-- `sudo` access (for reading the boot-menu config, and for
-  `boot-gardener rescue --apply`'s file operations)
+- `sudo` access (for reading the boot-menu config, picking, pruning,
+  harvesting, garbage-collecting, and `boot-gardener rescue --apply`'s file
+  operations; browsing the list doesn't need it)
   
 ## Editing the scripts
 

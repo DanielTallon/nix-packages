@@ -78,6 +78,15 @@ let
     # stray build results. None of the three touch the generation list itself
     # or any file this tool doesn't already document.
     #
+    # 'r' (pick) rolls the system back (or forward) to the highlighted
+    # generation: nix-env --switch-generation, then that generation's own
+    # switch-to-configuration switch|boot -- what 'nixos-rebuild switch
+    # --rollback' does, for any generation.
+    #
+    # Nothing asks for a sudo password until an action that needs root runs
+    # (see ensure_root); browsing the list only uses sudo if it works without
+    # one.
+    #
     # 'c' (config) only reads: each generation's recorded commit and the copy
     # of its config under <toplevel>/etc/nixos-config-source. Its one write is
     # copying files out to a folder the user types in, never over an existing
@@ -104,6 +113,9 @@ let
     RESCUE_SCRIPT="$(dirname "$SELF")/rescue.sh"
     # shellcheck source=./boot-backend.sh
     source "$(dirname "$SELF")/boot-backend.sh"
+    # Browsing never asks for a sudo password. Only actions that change the
+    # system do, when you pick them (see ensure_root below).
+    _BG_SUDO_NONINTERACTIVE=1
 
     usage() {
       cat <<'EOF'
@@ -112,7 +124,9 @@ let
     Usage:
       boot-gardener                      Interactively pick a generation --
                                          Enter to pin it (Limine only) or, on a
-                                         pin row, to unpin it; 'p' to prune a
+                                         pin row, to unpin it; 'r' to pick it
+                                         (roll back to it, now or at next
+                                         boot); 'p' to prune a
                                          non-bootloader generation; 'h' to
                                          harvest a bootloader generation (Tab
                                          to select several first for 'p'/'h');
@@ -120,7 +134,8 @@ let
                                          config a generation was built from
                                          (two rows: diff them);
                                          'g' to garbage-collect (no selection
-                                         needed); '?' to toggle this help
+                                         needed); 'b' to read the boot menu
+                                         with sudo; '?' to toggle this help
       boot-gardener --list               List currently pinned entries
       boot-gardener --remove NAME        Remove a pinned entry by name
       boot-gardener --output FILE        Use a different pins file (default: ./limine-pins.json)
@@ -159,6 +174,23 @@ let
 
     The pins file is always fully rewritten (never patched in place) and kept
     sorted by name, so it stays clean and diffable in git.
+
+    Browsing never asks for a sudo password. The boot menu lives on a
+    root-only /boot, so the BOOT column shows '?' until sudo has been given
+    ('b' reads it). Actions that change the system ('r', 'p', 'h', 'g') ask
+    for the password when you use them, then re-read the boot menu before
+    doing anything.
+
+    'r' (pick) makes the highlighted generation your system again, like
+    'nixos-rebuild switch --rollback' but for any generation: it points the
+    system profile at it, then runs its switch-to-configuration -- 'switch'
+    to start using it now, or 'boot' to boot into it next time. Both rewrite
+    the boot menu with it as the default. Newer generations aren't deleted.
+    On Limine, the boot menu always defaults to the newest generation, so
+    pick only offers 'switch' there: a reboot goes back to the newest one
+    unless you choose the picked one in the boot menu. Before the final
+    confirmation, pick shows how the boot menu will change under the picked
+    generation's settings and about how much new /boot space that needs.
 
     Tab-select multiple generations before pressing 'p' or 'h' to act on all of
     them in one go, each with its own confirmation. Enter (pin or unpin)
@@ -264,9 +296,9 @@ let
       FZF_THEME_ARGS=(--color "''${BOOT_GARDENER_COLORS:-$GARDEN_FZF_COLORS}")
     fi
 
-    # Splash shown once, while the first load runs (boot-menu read -- which
-    # may ask for sudo -- and the YIELD closure measurement). Anything those
-    # print, like the sudo prompt or "Measuring YIELD...", lands underneath it.
+    # Splash shown once, while the first load runs (boot-menu read, if sudo
+    # works without a password, and the YIELD closure measurement). Anything
+    # those print, like "Measuring YIELD...", lands underneath it.
     #
     # The art and its color mask are two same-shaped blocks: each character in
     # the mask picks the color of the character in the same spot in the art.
@@ -435,6 +467,17 @@ let
       Tab      Mark the highlighted generation for a multi-select action
                (p or h). Shift-Tab unmarks it.
 
+      r        Pick: go back to the highlighted generation, like
+               'nixos-rebuild switch --rollback' but for any generation.
+               Choose 'switch' (start using it now) or 'boot' (boot into it
+               next time); either way it becomes the boot menu's default.
+               On Limine it's 'switch' only: the boot menu always defaults
+               to the newest generation, so choose the picked one there to
+               boot back into it. Shows the boot-menu changes and new /boot
+               space needed before you confirm.
+               Newer generations aren't deleted, and your next rebuild lands
+               on top as usual. Typed confirmation required.
+
       p        Prune the marked generation(s) -- ONLY works on generations
                NOT currently in the boot menu. Deletes them from the
                NixOS system profile; doesn't touch /boot, so run 'g'
@@ -467,6 +510,11 @@ let
                two Tab-marked rows: diff their configs. Read-only apart
                from copying out. Needs the two lines in the README (only
                generations built after adding them have a copy).
+
+      b        Read the boot menu with sudo, to fill in the BOOT column.
+               Browsing never asks for a password on its own: the boot menu
+               is root-only, so BOOT shows '?' until you press b or use an
+               action that needs root (r, p, h, g), which asks then.
 
       ?        Toggle this help.
 
@@ -541,11 +589,11 @@ let
       DEFAULT_TITLE="NixOS (gen ''${GEN} — ''${GEN_DATE})"
 
       prompt "Short id [no spaces] (press enter for: ''${DEFAULT_NAME}) [q to cancel, back to menu]: " "$DEFAULT_NAME" NAME ||
-        { echo "Cancelled pinning generation $GEN. Back to the picker."; return 1; }
+        { echo "Cancelled pinning generation $GEN. Back to the list."; return 1; }
       prompt "Menu title (press enter for: ''${DEFAULT_TITLE}) [q to cancel, back to menu]: " "$DEFAULT_TITLE" TITLE ||
-        { echo "Cancelled pinning generation $GEN. Back to the picker."; return 1; }
+        { echo "Cancelled pinning generation $GEN. Back to the list."; return 1; }
       prompt "Comment (optional) [q to cancel, back to menu]: " "" COMMENT ||
-        { echo "Cancelled pinning generation $GEN. Back to the picker."; return 1; }
+        { echo "Cancelled pinning generation $GEN. Back to the list."; return 1; }
 
       if jq -e --arg name "$NAME" '.[] | select(.name == $name)' "$OUTPUT" >/dev/null; then
         echo "Note: an entry named '$NAME' already exists in $OUTPUT and will be replaced."
@@ -633,6 +681,7 @@ let
 
     gc_orphans_and_leftovers() {
       local CONFIRM
+      ensure_root "Garbage-collecting" || return 1
       # Global action -- not tied to whatever's selected in the list. Two parts:
       # 1) boot orphans (delegated entirely to rescue.sh's own Phase 1
       #    report/apply, same as running it by hand with no --evict);
@@ -678,6 +727,13 @@ let
     prune_generation() {
       local GEN="$1"
       local CONFIRM
+
+      if [[ "$BOOT_STATE" != ok ]]; then
+        echo
+        echo "Can't read the boot menu, so there's no telling whether generation" >&2
+        echo "$GEN is on it -- refusing to prune it." >&2
+        return 1
+      fi
 
       if [[ -n "''${IN_BOOTLOADER[$GEN]:-}" ]]; then
         echo
@@ -769,7 +825,7 @@ let
       echo "reclaiming the /boot space it alone was using."
       echo "(This runs 'boot-gardener rescue --evict $GEN --apply' -- see its own"
       echo "confirmation prompts below for exactly what that does. 'q' there just"
-      echo "skips this generation and returns you to the picker.)"
+      echo "skips this generation and returns you to the list.)"
       echo
 
       if [[ ! -x "$RESCUE_SCRIPT" ]]; then
@@ -784,9 +840,374 @@ let
       if "$RESCUE_SCRIPT" "''${RESCUE_ARGS[@]}" --evict "$GEN" --apply; then
         return 0
       else
-        echo "Harvest of generation $GEN did not complete (cancelled or refused) -- back to the picker." >&2
+        echo "Harvest of generation $GEN did not complete (cancelled or refused) -- back to the list." >&2
         return 1
       fi
+    }
+
+    # --- Root, only when it's needed ---------------------------------------------
+    # Browsing the list never asks for a password. The boot menu lives under a
+    # root-only /boot, so until sudo has been given the BOOT column shows '?'
+    # ('locked'). Every action that needs root calls ensure_root first, which
+    # asks for the password right then and re-reads the boot menu, so the
+    # action's own checks always see the real, current menu.
+    #
+    # BOOT_STATE is one of:
+    #   ok      read just now
+    #   locked  not read: it needs a sudo password nobody has typed yet
+    #   stale   sudo has timed out since the last good read, so the BOOT
+    #           column shows that read (BOOT_LAST_READ_AT) rather than going
+    #           blank. ensure_root always re-reads before an action uses it.
+    #   failed  a real read error (see the 'Note:' it printed)
+    BOOT_STATE=locked
+    BOOT_LAST_LIST=""
+    BOOT_LAST_READ_AT=""
+    BOOT_COUNT=0
+    declare -A IN_BOOTLOADER=()
+
+    read_boot_menu() {
+      local list="" bgen
+      IN_BOOTLOADER=()
+      BOOT_COUNT=0
+      if ! backend_boot_menu_readable; then
+        if [[ -n "$BOOT_LAST_READ_AT" ]]; then
+          BOOT_STATE=stale
+          list="$BOOT_LAST_LIST"
+        else
+          BOOT_STATE=locked
+          return 0
+        fi
+      # Captured into a variable rather than read through `< <(...)`, so the
+      # exit status is checkable: process substitution throws it away, and a
+      # failed read would look exactly like an empty boot menu.
+      elif list=$(backend_kept_generations_lenient); then
+        BOOT_STATE=ok
+        BOOT_LAST_LIST="$list"
+        BOOT_LAST_READ_AT=$(date +%H:%M)
+      else
+        BOOT_STATE=failed
+        return 0
+      fi
+      while read -r bgen; do
+        if [[ -n "$bgen" ]]; then
+          IN_BOOTLOADER["$bgen"]=1
+          BOOT_COUNT=$((BOOT_COUNT + 1))
+        fi
+      done <<<"$list"
+    }
+
+    # $1: what's about to happen, for the message ("Pruning", ...). Returns 1
+    # (and the caller changes nothing) if sudo can't be had.
+    ensure_root() {
+      local what="$1"
+      if ! _bg_sudo_ready; then
+        if ! command -v sudo >/dev/null 2>&1; then
+          echo
+          echo "$what needs root, and 'sudo' isn't available -- nothing changed." >&2
+          return 1
+        fi
+        echo
+        echo "$what needs administrator rights -- sudo will ask for your password."
+        if ! sudo -v; then
+          echo "Couldn't get sudo -- nothing changed." >&2
+          return 1
+        fi
+      fi
+      read_boot_menu
+      return 0
+    }
+
+    # --- Pick ('r'): go back to a generation --------------------------------------
+    # What 'nixos-rebuild switch --rollback' does for the previous generation,
+    # for any generation: point the system profile at it (nix-env
+    # --switch-generation), then run that generation's own
+    # switch-to-configuration. 'switch' activates it now; 'boot' only makes it
+    # the boot menu's default for next time. Both rewrite the boot menu. Newer
+    # generations stay in the profile -- nothing is deleted. Limine is the
+    # exception: its installer always defaults to the newest generation, so
+    # 'boot' would do nothing useful there and pick only switches.
+
+    # Runs it the way nixos-rebuild does: as a transient systemd unit, so a
+    # switch that restarts your desktop or terminal can't kill it halfway
+    # through. The unit name is the one nixos-rebuild uses, so systemd refuses
+    # to start this while a rebuild's switch is already running, and the
+    # other way around.
+    run_switch_to_configuration() {
+      local top="$1" mode="$2"
+      if command -v systemd-run >/dev/null 2>&1; then
+        sudo systemd-run --collect --no-ask-password --pipe --quiet \
+          --service-type=exec --unit=nixos-rebuild-switch-to-configuration \
+          --wait "$top/bin/switch-to-configuration" "$mode"
+      else
+        sudo "$top/bin/switch-to-configuration" "$mode"
+      fi
+    }
+
+    # Kernel and initrd store paths a toplevel's boot entries need, including
+    # its specialisations -- what an installer copies into /boot for it.
+    _boot_files_of() {
+      local top="$1" s f
+      for s in "$top" "$top"/specialisation/*; do
+        for f in kernel initrd; do
+          [[ -e "$s/$f" ]] && readlink -f "$s/$f"
+        done
+      done
+      return 0
+    }
+
+    # Before a pick: what the boot menu would hold once GEN's own installer
+    # rewrites it, and about how much new /boot space that takes. A pick runs
+    # GEN's installer with GEN's settings, which can keep more generations
+    # than your current config does. Limine (and the others) copy new
+    # kernels and initrds before removing unused ones, so it all has to fit
+    # in the free space at once. Read-only. Sets PICK_SPACE_SHORT=1 when the
+    # estimate is more than /boot has free, and PICK_IN_MENU=0 when GEN
+    # itself won't be on the rewritten menu (1 when it will, or when that
+    # can't be told).
+    preview_pick_boot_menu() {
+      local GEN="$1" top="$2" info limit copies cur_info cur_limit="" g start
+      local need=0 free=0 nfiles=0 f sz
+      local -a all=() predicted=() added=() dropped=()
+      local -A have=() counted=()
+      PICK_SPACE_SHORT=0
+      PICK_IN_MENU=1
+
+      if ! info=$(backend_menu_limit_for "$top"); then
+        echo "Couldn't tell how many generations generation $GEN's boot menu keeps,"
+        echo "so there's no estimate of the /boot space this needs."
+        return 0
+      fi
+      read -r limit copies <<<"$info"
+      if cur_info=$(backend_menu_limit_for "$(readlink -f /run/current-system)"); then
+        read -r cur_limit _ <<<"$cur_info"
+      fi
+
+      mapfile -t all < <(for f in /nix/var/nix/profiles/system-*-link; do _gen_of_link "$f"; done | sort -n)
+      predicted=("''${all[@]}")
+      if [[ "$limit" -gt 0 && ''${#all[@]} -gt "$limit" ]]; then
+        start=$(( ''${#all[@]} - limit ))
+        predicted=("''${all[@]:start}")
+      fi
+
+      if [[ "$limit" -eq 0 ]]; then
+        echo "Generation $GEN's boot menu keeps every generation in the list."
+      else
+        echo "Generation $GEN's boot menu keeps the newest $limit generations."
+      fi
+      if [[ -n "$cur_limit" && "$cur_limit" != "$limit" ]]; then
+        echo "Your running config keeps ''${cur_limit/#0/every one}, so the boot menu will change size."
+      fi
+      # GRUB always adds the installed generation as its own default entry;
+      # Limine and systemd-boot only list the newest N, so an older pick can
+      # fall off the menu entirely.
+      if [[ " ''${predicted[*]} " == *" $GEN "* || "$BOOTLOADER" == grub ]]; then
+        PICK_IN_MENU=1
+      else
+        PICK_IN_MENU=0
+        echo
+        echo "⚠️  Generation $GEN is older than those $limit, so it won't be on the boot"
+        echo "   menu at all. You can use it until you reboot, but not boot into it."
+      fi
+
+      if [[ "$BOOT_STATE" != ok ]]; then
+        echo "(Can't read the current boot menu, so no comparison or space estimate.)"
+        return 0
+      fi
+
+      for g in "''${predicted[@]}"; do
+        [[ -n "''${IN_BOOTLOADER[$g]:-}" ]] || added+=("$g")
+      done
+      for g in "''${!IN_BOOTLOADER[@]}"; do
+        [[ " ''${predicted[*]} " == *" $g "* ]] || dropped+=("$g")
+      done
+      if [[ ''${#dropped[@]} -gt 0 ]]; then
+        mapfile -t dropped < <(printf '%s\n' "''${dropped[@]}" | sort -nr)
+      fi
+      echo "  Added to the boot menu:     ''${added[*]:-(none)}"
+      echo "  Dropped from the boot menu: ''${dropped[*]:-(none)}"
+
+      if [[ "$copies" -eq 0 ]]; then
+        echo "  It doesn't copy kernels into /boot (GRUB copyKernels = false), so no"
+        echo "  new /boot space is needed."
+        return 0
+      fi
+
+      for g in "''${!IN_BOOTLOADER[@]}"; do
+        while read -r f; do [[ -n "$f" ]] && have[$f]=1; done \
+          < <(_boot_files_of "$(readlink -f "/nix/var/nix/profiles/system-''${g}-link" 2>/dev/null)")
+      done
+      for g in "''${added[@]}"; do
+        while read -r f; do
+          [[ -n "$f" && -z "''${have[$f]:-}" && -z "''${counted[$f]:-}" ]] || continue
+          counted[$f]=1
+          sz=$(stat -L -c %s "$f" 2>/dev/null || echo 0)
+          need=$((need + sz))
+          nfiles=$((nfiles + 1))
+        done < <(_boot_files_of "$(readlink -f "/nix/var/nix/profiles/system-''${g}-link" 2>/dev/null)")
+      done
+
+      free=$(df -B1 --output=avail /boot 2>/dev/null | tail -n1 | tr -d ' ') || free=""
+      if [[ "$nfiles" -eq 0 ]]; then
+        echo "  New files for /boot: none -- everything it needs is already there."
+        return 0
+      fi
+      echo "  New files for /boot: about $(fmt_bytes "$need") ($nfiles kernel/initrd files)."
+      if [[ "$free" =~ ^[0-9]+$ ]]; then
+        echo "  /boot has $(fmt_bytes "$free") free."
+        if [[ "$need" -gt "$free" ]]; then
+          PICK_SPACE_SHORT=1
+          echo
+          echo "⚠️  That's more than /boot has free. The bootloader install would very"
+          echo "   likely run out of space partway through. You could free /boot space"
+          echo "   first ('g' clears orphaned files), or pick a generation built with"
+          echo "   your current boot-menu settings."
+        fi
+      fi
+      return 0
+    }
+
+    # The highest generation number in the profile. Limine's boot menu always
+    # defaults to this one, whatever the profile head points at.
+    newest_gen() {
+      local l
+      for l in /nix/var/nix/profiles/system-*-link; do _gen_of_link "$l"; done | sort -n | tail -n1
+    }
+
+    pick_generation() {
+      local GEN="$1" TARGET MODE CONFIRM OLD_HEAD npins=0 NEWEST
+      TARGET=$(readlink -f "/nix/var/nix/profiles/system-''${GEN}-link" 2>/dev/null || true)
+      if [[ -z "$TARGET" || ! -x "$TARGET/bin/switch-to-configuration" ]]; then
+        echo
+        echo "Generation $GEN's system build is missing or incomplete (no" >&2
+        echo "bin/switch-to-configuration), so it can't be switched to." >&2
+        return 1
+      fi
+      if [[ "$GEN" == "$HEAD_GEN" && "$GEN" == "$RUNNING_GEN" ]]; then
+        echo
+        echo "Generation $GEN is already the current generation -- nothing to pick."
+        return 1
+      fi
+
+      NEWEST=$(newest_gen)
+
+      echo
+      echo "Picking generation $GEN: making it your system again, the way"
+      echo "'nixos-rebuild switch --rollback' does for the previous generation."
+      echo
+      if [[ "$BOOTLOADER" == limine ]]; then
+        # Limine's installer ignores the profile head: it lists the newest N
+        # generations by number and always defaults to the highest one. So
+        # 'boot' can't make an older generation the next boot, and a
+        # 'switch' only lasts until the next reboot.
+        MODE=switch
+        echo "This starts using generation $GEN now."
+        if [[ "$GEN" != "$NEWEST" ]]; then
+          echo
+          echo "On Limine, the boot menu always defaults to the newest generation"
+          echo "(generation $NEWEST here), whatever the system profile points at. So"
+          echo "after a reboot you're back on generation $NEWEST, unless you choose"
+          echo "generation $GEN in the boot menu. (With 'remember_last_entry: yes' in"
+          echo "your Limine config, choosing it once keeps it chosen.) That's also"
+          echo "how 'nixos-rebuild switch --rollback' behaves on Limine, and why"
+          echo "pick has no 'boot' option here."
+        fi
+        echo
+        echo "The boot menu is rewritten using generation $GEN's own bootloader"
+        echo "settings."
+      else
+        echo "  switch  Start using generation $GEN now, and make it the boot menu's"
+        echo "          default. A different kernel only loads after a reboot."
+        echo "  boot    Leave what's running alone; boot into generation $GEN next time."
+        echo
+        echo "Either way, the boot menu is rewritten using generation $GEN's own"
+        echo "bootloader settings."
+      fi
+      echo "Newer generations stay in the list (nothing is deleted), and your next"
+      echo "rebuild still lands on top as a new generation."
+      if backend_supports_pin && [[ -f "$OUTPUT" ]]; then
+        npins=$(jq 'length' "$OUTPUT" 2>/dev/null || echo 0)
+      fi
+      if [[ "$npins" -gt 0 ]]; then
+        echo
+        echo "Pins: the boot menu gets whatever pins generation $GEN was built with."
+        echo "Pins added since then stay in $OUTPUT and come back on your next rebuild."
+      fi
+      echo
+
+      if [[ "$BOOTLOADER" != limine ]]; then
+        prompt "Switch now or at next boot? [switch/boot, q to cancel]: " "" MODE ||
+          { echo "Cancelled. Nothing changed."; return 1; }
+        case "$MODE" in
+          switch | boot) ;;
+          *)
+            echo "Expected 'switch' or 'boot' -- nothing changed." >&2
+            return 1
+            ;;
+        esac
+      fi
+      # Root comes before the last confirmation, not after: comparing against
+      # the current boot menu means reading it, and the space warning has to
+      # be on screen before you answer.
+      ensure_root "Picking a generation" || return 1
+      echo
+      preview_pick_boot_menu "$GEN" "$TARGET"
+      echo
+
+      if [[ "$MODE" == boot && "$PICK_IN_MENU" -eq 0 ]]; then
+        echo "'boot' can't work here: generation $GEN won't be on the boot menu." >&2
+        echo "Nothing changed. Pick it with 'switch' to use it until you reboot." >&2
+        return 1
+      fi
+
+      local ask="Make generation $GEN your system ($MODE)? [yes/N]: "
+      [[ "$PICK_SPACE_SHORT" -eq 1 ]] && ask="Make generation $GEN your system ($MODE) anyway? [yes/N]: "
+      read -rp "$ask" CONFIRM
+      if [[ "$CONFIRM" != "yes" ]]; then
+        echo "Skipped. Nothing changed."
+        return 1
+      fi
+
+      OLD_HEAD="$HEAD_GEN"
+      if ! sudo nix-env -p /nix/var/nix/profiles/system --switch-generation "$GEN"; then
+        echo "Couldn't point the system profile at generation $GEN -- nothing changed." >&2
+        return 1
+      fi
+      HEAD_GEN="$GEN"
+      echo "Profile now points at generation $GEN. Running its switch-to-configuration $MODE..."
+      echo
+
+      if run_switch_to_configuration "$TARGET" "$MODE"; then
+        echo
+        if [[ "$MODE" == switch && "$PICK_IN_MENU" -eq 0 ]]; then
+          echo "Done. You're on generation $GEN now. It isn't on the boot menu, so a"
+          echo "reboot takes you to generation $NEWEST."
+        elif [[ "$MODE" == switch && "$BOOTLOADER" == limine && "$GEN" != "$NEWEST" ]]; then
+          echo "Done. You're on generation $GEN now. The boot menu still defaults to"
+          echo "generation $NEWEST; choose $GEN there if you want to boot back into it."
+        elif [[ "$MODE" == switch ]]; then
+          echo "Done. You're on generation $GEN now, and it's the boot menu's default."
+        else
+          echo "Done. Generation $GEN is the boot menu's default -- reboot to use it."
+        fi
+        return 0
+      fi
+
+      echo
+      echo "switch-to-configuration $MODE failed (see above). The system profile" >&2
+      echo "already points at generation $GEN, so the next rebuild or boot-menu" >&2
+      echo "rewrite treats it as current." >&2
+      if [[ -n "$OLD_HEAD" && "$OLD_HEAD" != "$GEN" ]]; then
+        read -rp "Point the profile back at generation $OLD_HEAD? [yes/N]: " CONFIRM
+        if [[ "$CONFIRM" == "yes" ]]; then
+          if sudo nix-env -p /nix/var/nix/profiles/system --switch-generation "$OLD_HEAD"; then
+            HEAD_GEN="$OLD_HEAD"
+            echo "Profile is back on generation $OLD_HEAD."
+            [[ "$MODE" == switch ]] &&
+              echo "If the switch got partway, pick generation $OLD_HEAD with 'switch' to finish undoing it."
+          fi
+        fi
+      fi
+      return 1
     }
 
     # --- Config snapshots ('c') --------------------------------------------------
@@ -1242,43 +1663,22 @@ let
       # head "(current)" there was wrong, and made rescue/harvest refuse to run.
       resolve_running_generations
 
-      declare -A IN_BOOTLOADER=()
-      BOOT_COUNT=0
-
-      # Captured into a variable (rather than the previous
-      # `< <(backend_kept_generations_lenient)`) specifically so its exit
-      # status is checkable -- process substitution silently discards a
-      # command's exit status, which previously meant a failed boot-menu read
-      # was indistinguishable from a genuinely empty one: every generation
-      # would look not-in-bootloader with no indication anything went wrong.
-      BOOT_READ_OK=1
-      BOOT_LIST=""
-      BOOT_LIST=$(backend_kept_generations_lenient) || BOOT_READ_OK=0
-
-      while read -r bgen; do
-        if [[ -n "$bgen" ]]; then
-          IN_BOOTLOADER["$bgen"]=1
-          BOOT_COUNT=$((BOOT_COUNT + 1))
-        fi
-      done <<<"$BOOT_LIST"
+      read_boot_menu
 
       # Surface a failed read loudly, and PAUSE for it -- same reasoning as
       # pause_after_action (see its comment above): a message printed right
       # before fzf redraws the full-screen list gets wiped before there's any
-      # real chance to read it. Without this pause, a failed read here just
-      # silently presents as "0 in bootloader", which looks identical to a
-      # genuinely empty boot menu but makes every generation look safe to
-      # prune ('p') and makes harvest ('h') refuse everything.
-      if [[ "$BOOT_READ_OK" -eq 0 ]]; then
+      # real chance to read it. A boot menu that simply hasn't been read yet
+      # (no sudo given this session) isn't a failure -- the header says so
+      # quietly instead.
+      if [[ "$BOOT_STATE" == failed ]]; then
         echo
         echo "⚠️  Could not read the boot menu -- see the 'Note:' above for why" >&2
-        echo "   (usually a permissions problem reading under /boot, or a sudo" >&2
-        echo "   prompt that didn't go through). The '0 in bootloader' you're" >&2
-        echo "   about to see is NOT a confirmed-empty boot menu -- it's an" >&2
-        echo "   UNREADABLE one. Until this is fixed:" >&2
-        echo "     - every generation will look prunable ('p'), even ones that" >&2
-        echo "       are really still on the boot menu" >&2
-        echo "     - 'h' (harvest) will refuse every generation" >&2
+        echo "   (usually a permissions problem reading under /boot). The BOOT" >&2
+        echo "   column you're about to see is NOT a confirmed-empty boot menu" >&2
+        echo "   -- it's an UNREADABLE one. Until this is fixed, 'p' (prune)" >&2
+        echo "   and 'h' (harvest) refuse every generation, since neither can" >&2
+        echo "   tell which ones are really on the boot menu." >&2
         pause_after_action
       fi
 
@@ -1324,7 +1724,11 @@ let
         fi
 
         boot_marker="-"
-        [[ -n "''${IN_BOOTLOADER[$gen]:-}" ]] && boot_marker="✓"
+        if [[ "$BOOT_STATE" == locked ]]; then
+          boot_marker="?"
+        elif [[ -n "''${IN_BOOTLOADER[$gen]:-}" ]]; then
+          boot_marker="✓"
+        fi
 
         yield_str="?"
         [[ "$YIELD_OK" -eq 1 && -n "''${YIELD[$gen]:-}" ]] && yield_str=$(fmt_bytes "''${YIELD[$gen]}")
@@ -1379,21 +1783,35 @@ let
         [[ -n "$boot_used" ]] && BOOT_USAGE="/boot: ''${boot_used} used, ''${boot_avail} free (''${boot_pcent} full)"
       fi
 
-      HEADER_TEXT="NixOS Generations (''${#ROWS[@]} total, ''${BOOT_COUNT} in bootloader, ''${#PIN_ROWS[@]} pinned -- $BOOTLOADER)"
+      BOOT_COUNT_STR="$BOOT_COUNT"
+      [[ "$BOOT_STATE" == locked ]] && BOOT_COUNT_STR="?"
+      HEADER_TEXT="NixOS Generations (''${#ROWS[@]} total, ''${BOOT_COUNT_STR} in bootloader, ''${#PIN_ROWS[@]} pinned -- $BOOTLOADER)"
       [[ -n "$BOOT_USAGE" ]] && HEADER_TEXT="''${HEADER_TEXT}"$'\n'"''${BOOT_USAGE}"
+      case "$BOOT_STATE" in
+        locked)
+          HEADER_TEXT="''${HEADER_TEXT}"$'\n'"BOOT column not read yet (the boot menu is root-only) -- press b to read it with sudo"
+          ;;
+        stale)
+          HEADER_TEXT="''${HEADER_TEXT}"$'\n'"BOOT column as of ''${BOOT_LAST_READ_AT} (sudo has timed out) -- press b to re-read it"
+          ;;
+      esac
       if [[ "$YIELD_ENABLED" -eq 1 && "$YIELD_OK" -eq 0 ]]; then
         HEADER_TEXT="''${HEADER_TEXT}"$'\n'"YIELD unavailable (couldn't read store closures) -- column shows '?'"
       fi
       if [[ -n "$HEAD_GEN" && -n "$BOOTED_GEN" && "$HEAD_GEN" != "$BOOTED_GEN" ]]; then
-        if [[ -z "''${IN_BOOTLOADER[$HEAD_GEN]:-}" && "$BOOT_READ_OK" -eq 1 ]]; then
+        if [[ -z "''${IN_BOOTLOADER[$HEAD_GEN]:-}" && "$BOOT_STATE" == ok ]]; then
           HEADER_TEXT="''${HEADER_TEXT}"$'\n'"Profile head is gen ''${HEAD_GEN}, but it never made it onto the boot menu -- you booted gen ''${BOOTED_GEN}"
+        elif [[ "$BOOTLOADER" == limine ]]; then
+          # Limine defaults to the newest generation, not the profile head.
+          HEADER_TEXT="''${HEADER_TEXT}"$'\n'"Profile head is gen ''${HEAD_GEN} -- you booted gen ''${BOOTED_GEN} (Limine boots gen $(newest_gen) by default)"
         else
           HEADER_TEXT="''${HEADER_TEXT}"$'\n'"Profile head is gen ''${HEAD_GEN} (next boot's default) -- you booted gen ''${BOOTED_GEN}"
         fi
       fi
       ENTER_LABEL="Enter:pin/unpin"
       backend_supports_pin || ENTER_LABEL="Enter:pin(Limine only)"
-      FOOTER_TEXT="  q/Esc:quit   ''${ENTER_LABEL}   Tab:multi-select   p:prune   h:harvest   c:config   g:gc   ?:help   ↑↓:move   Type to filter  "
+      FOOTER_TEXT="  q/Esc:quit   ''${ENTER_LABEL}   Tab:multi-select   r:pick   p:prune   h:harvest   c:config   g:gc   ?:help  "
+      FOOTER_TEXT+=$'\n'"  b:read boot menu (sudo)   ↑↓:move   Type to filter  "
 
       RAW=$(
         {
@@ -1413,11 +1831,20 @@ let
             --bind '?:toggle-preview' \
             --preview "cat '$HELP_FILE'" \
             --preview-window '~3,down,70%:hidden:wrap' \
-            --expect=p,g,h,c
+            --expect=p,g,h,c,r,b
       ) || true
 
       KEY=$(head -n1 <<<"$RAW")
       SELECTED=$(tail -n +2 <<<"$RAW")
+
+      if [[ "$KEY" == "b" ]]; then
+        # Fill in the BOOT column. Nothing else -- the redraw shows the result.
+        if [[ "$BOOT_STATE" == ok ]]; then
+          continue
+        fi
+        ensure_root "Reading the boot menu" || pause_after_action
+        continue
+      fi
 
       if [[ "$KEY" == "g" ]]; then
         # Global action -- deliberately doesn't require (or care about) a
@@ -1434,7 +1861,29 @@ let
 
       mapfile -t SELECTED_GENS < <(awk '{print $1}' <<<"$SELECTED")
 
+      if [[ "$KEY" == "r" ]]; then
+        if [[ ''${#SELECTED_GENS[@]} -gt 1 ]]; then
+          echo
+          echo "Pick goes back to one generation -- you selected ''${#SELECTED_GENS[@]}." >&2
+        elif [[ "''${SELECTED_GENS[0]}" == pin:* ]]; then
+          echo
+          echo "''\'''${SELECTED_GENS[0]#pin:}' is a pin, not a generation. Pins are only for booting" >&2
+          echo "from the boot menu; pick the generation row it came from instead." >&2
+        else
+          # '|| true': see the note above prune_generation's call below.
+          pick_generation "''${SELECTED_GENS[0]}" || true
+        fi
+        pause_after_action
+        continue
+      fi
+
       if [[ "$KEY" == "p" ]]; then
+        # Ask for sudo once, before the first generation, so every check
+        # below sees the boot menu as it really is.
+        if ! ensure_root "Pruning"; then
+          pause_after_action
+          continue
+        fi
         for GEN in "''${SELECTED_GENS[@]}"; do
           if [[ "$GEN" == pin:* ]]; then
             echo
@@ -1471,11 +1920,22 @@ let
       fi
 
       if [[ "$KEY" == "h" ]]; then
+        if ! ensure_root "Harvesting"; then
+          pause_after_action
+          continue
+        fi
         for GEN in "''${SELECTED_GENS[@]}"; do
           if [[ "$GEN" == pin:* ]]; then
             echo
             echo "''\'''${GEN#pin:}' is a pin, not a generation -- pins aren't harvested." >&2
             echo "Select it alone and press Enter to unpin it instead." >&2
+            pause_after_action
+            continue
+          fi
+          if [[ "$BOOT_STATE" != ok ]]; then
+            echo
+            echo "Can't read the boot menu, so there's no telling whether generation" >&2
+            echo "$GEN is on it -- refusing to harvest it." >&2
             pause_after_action
             continue
           fi
@@ -1996,6 +2456,11 @@ let
     #       and callers must check this rather than treating empty output as
     #       "zero generations in the boot menu."
     #
+    #   backend_boot_menu_readable
+    #       Returns 0 if the boot-menu config can be read right now without a
+    #       sudo password prompt. The picker checks this before every
+    #       lenient read, so just opening the list never asks for a password.
+    #
     #   backend_kept_generations_strict
     #       Same, but exits the whole script on a read failure. For callers
     #       (rescue) that are about to make destructive decisions and must
@@ -2046,6 +2511,26 @@ let
 
     # --- Generic Root-Read Helpers ----------------------------------------------
 
+    # Every sudo call in the read helpers below goes through here. rescue.sh
+    # leaves _BG_SUDO_NONINTERACTIVE unset, so sudo prompts for a password as
+    # usual. The interactive list sets it to 1: there, just browsing must
+    # never ask for a password, so sudo only runs if it can without one
+    # (NOPASSWD, or a still-fresh sudo timestamp). The list asks for the
+    # password itself, up front, only when an action actually needs root --
+    # see ensure_root in gardener.sh.
+    _bg_sudo() {
+      if [[ "''${_BG_SUDO_NONINTERACTIVE:-0}" == 1 ]]; then
+        sudo -n "$@"
+      else
+        sudo "$@"
+      fi
+    }
+
+    # 0 if sudo works right now without asking for a password.
+    _bg_sudo_ready() {
+      command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null
+    }
+
     read_root_file() {
       # Strict: exits the script if the file can't be read at all.
       local path="$1"
@@ -2055,7 +2540,7 @@ let
         # Parent directories here (e.g. /boot, /boot/limine) are often not
         # traversable by a non-root user, so -r/-e on the file itself can't be
         # trusted -- just attempt sudo directly rather than gating on a test.
-        sudo cat "$path"
+        _bg_sudo cat "$path"
       else
         echo "Error: cannot read '$path' (not readable, and no sudo available)." >&2
         exit 1
@@ -2071,7 +2556,7 @@ let
         return 0
       fi
       if command -v sudo >/dev/null 2>&1; then
-        if content=$(sudo cat "$path" 2>&1); then
+        if content=$(_bg_sudo cat "$path" 2>&1); then
           printf '%s' "$content"
           return 0
         fi
@@ -2098,7 +2583,7 @@ let
       if [[ -r "$path" ]]; then
         find "$path" -maxdepth 1 -type f -name "$pattern" -printf '%f\t%s\n'
       elif command -v sudo >/dev/null 2>&1; then
-        sudo find "$path" -maxdepth 1 -type f -name "$pattern" -printf '%f\t%s\n'
+        _bg_sudo find "$path" -maxdepth 1 -type f -name "$pattern" -printf '%f\t%s\n'
       else
         echo "Error: cannot list '$path' (not readable, and no sudo available)." >&2
         exit 1
@@ -2113,7 +2598,7 @@ let
         return 0
       fi
       if command -v sudo >/dev/null 2>&1; then
-        if out=$(sudo find "$path" -maxdepth 1 -type f -name "$pattern" -printf '%f\t%s\n' 2>&1); then
+        if out=$(_bg_sudo find "$path" -maxdepth 1 -type f -name "$pattern" -printf '%f\t%s\n' 2>&1); then
           printf '%s\n' "$out"
           return 0
         fi
@@ -2272,7 +2757,7 @@ let
       if [[ -e "$path" ]]; then
         return 0
       elif command -v sudo >/dev/null 2>&1; then
-        sudo test -e "$path" 2>/dev/null
+        _bg_sudo test -e "$path" 2>/dev/null
       else
         return 1
       fi
@@ -2285,11 +2770,82 @@ let
       if [[ -r "$path" ]]; then
         stat -c '%Y' "$path" 2>/dev/null
       elif command -v sudo >/dev/null 2>&1; then
-        sudo stat -c '%Y' "$path" 2>/dev/null
+        _bg_sudo stat -c '%Y' "$path" 2>/dev/null
       fi
     }
 
     _BACKEND_NAMES=(limine systemd-boot grub)
+
+    # Prints "LIMIT COPIES" for the bootloader installer a system build
+    # (toplevel) carries: LIMIT is how many of the newest profile generations
+    # its boot menu keeps (0 = no limit), COPIES is 1 if it copies kernels and
+    # initrds into /boot (0 for GRUB with copyKernels = false). Read from that
+    # build's own installer files, so no root is needed. Returns 1 if it can't
+    # tell. The three installers keep their limit in different places:
+    #   Limine        "maxGenerations": N            in limine-install.json
+    #   systemd-boot  CONFIGURATION_LIMIT = int("N") in its builder script
+    #   GRUB          <attr name="configurationLimit"> then value="N", and
+    #                 copyKernels the same way, in grub-config.xml
+    # Each is found by following store paths out from switch-to-configuration
+    # a few files deep, skipping binaries and anything large.
+    backend_menu_limit_for() {
+      local top="$1" stc f next limit="" copies=1 depth
+      local -a queue=() seen=()
+      stc="$top/bin/switch-to-configuration"
+      [[ -r "$stc" ]] || return 1
+      mapfile -t queue < <(grep -oE '/nix/store/[a-z0-9]{32}-[A-Za-z0-9._+-]*(install|systemd-boot|grub)[A-Za-z0-9._+/-]*' "$stc" 2>/dev/null | sort -u)
+      for ((depth = 0; depth < 4 && ''${#queue[@]} > 0; depth++)); do
+        next=()
+        for f in "''${queue[@]}"; do
+          [[ " ''${seen[*]} " == *" $f "* ]] && continue
+          seen+=("$f")
+          [[ -f "$f" && -r "$f" ]] || continue
+          [[ $(stat -c %s "$f" 2>/dev/null || echo 0) -le 1048576 ]] || continue
+          [[ "$(head -c 4 "$f" 2>/dev/null | tr -d '\0')" == $'\x7fELF' ]] && continue
+          if [[ -z "$limit" ]]; then
+            limit=$(grep -oE '"maxGenerations": *[0-9]+' "$f" 2>/dev/null | grep -oE '[0-9]+$' | head -n1) || true
+          fi
+          if [[ -z "$limit" ]]; then
+            limit=$(grep -oE 'CONFIGURATION_LIMIT = int\("[0-9]+"\)' "$f" 2>/dev/null | grep -oE '[0-9]+' | head -n1) || true
+          fi
+          if [[ -z "$limit" ]] && grep -q 'name="configurationLimit"' "$f" 2>/dev/null; then
+            limit=$(awk '/name="configurationLimit"/ { want = 1; next }
+                         want && match($0, /value="[0-9]+"/) { print substr($0, RSTART + 7, RLENGTH - 8); exit }' "$f")
+            if awk '/name="copyKernels"/ { want = 1; next }
+                    want { exit ($0 ~ /value="false"/) ? 0 : 1 }' "$f"; then
+              copies=0
+            fi
+          fi
+          if [[ -n "$limit" ]]; then
+            echo "$limit $copies"
+            return 0
+          fi
+          mapfile -t -O "''${#next[@]}" next < <(grep -aoE '/nix/store/[a-z0-9]{32}-[A-Za-z0-9._+/-]+' "$f" 2>/dev/null | sort -u)
+        done
+        queue=("''${next[@]}")
+      done
+      return 1
+    }
+
+    # Which bootloader the running system installs, read without root:
+    # switch-to-configuration names the installer script as a store path
+    # (INSTALL_BOOTLOADER), and each NixOS loader module gives that script a
+    # recognizable name. Prints the backend name, or returns 1 if it can't
+    # tell (an unusual loader, or a layout this doesn't know).
+    _bootloader_from_system() {
+      local stc="$_BG_RUN_DIR/current-system/bin/switch-to-configuration" paths
+      [[ -r "$stc" ]] || return 1
+      paths="$(grep -oE '/nix/store/[a-z0-9]+-[A-Za-z0-9._+-]+' "$stc" 2>/dev/null)" || return 1
+      if grep -qE -- '-limine-install' <<<"$paths"; then
+        echo limine
+      elif grep -qE -- '-install-systemd-boot' <<<"$paths"; then
+        echo systemd-boot
+      elif grep -qE -- '-install-grub' <<<"$paths"; then
+        echo grub
+      else
+        return 1
+      fi
+    }
 
     _marker_for_backend() {
       case "$1" in
@@ -2315,6 +2871,20 @@ let
         marker="$(_marker_for_backend "$b")"
         path_exists_root "$marker" && found+=("$b")
       done
+
+      # No marker seen, but only because we weren't allowed to look: /boot is
+      # usually root-only, and the interactive list doesn't ask for a sudo
+      # password just to start. Ask the running system which bootloader
+      # installer it uses instead. If even that can't tell, fall back to the
+      # old way and let sudo prompt.
+      if [[ ''${#found[@]} -eq 0 && "''${_BG_SUDO_NONINTERACTIVE:-0}" == 1 ]] && ! _bg_sudo_ready; then
+        if b="$(_bootloader_from_system)"; then
+          echo "$b"
+          return 0
+        fi
+        _BG_SUDO_NONINTERACTIVE=0 detect_bootloader
+        return
+      fi
 
       case "''${#found[@]}" in
         0)
@@ -2394,6 +2964,23 @@ let
 
     backend_supports_pin() {
       [[ "$BOOTLOADER" == "limine" ]]
+    }
+
+    # 0 if the boot-menu config can be read right now without a password
+    # prompt: either it's readable as-is, or sudo works without asking.
+    backend_boot_menu_readable() {
+      local p
+      case "$BOOTLOADER" in
+        limine) p="$LIMINE_CONF" ;;
+        systemd-boot) p="$SYSTEMD_BOOT_ENTRIES_DIR" ;;
+        grub) p="$GRUB_CONF" ;;
+      esac
+      if [[ -d "$p" ]]; then
+        [[ -r "$p" && -x "$p" ]] && return 0
+      elif [[ -r "$p" ]]; then
+        return 0
+      fi
+      _bg_sudo_ready
     }
 
     # --- kept generations ---------------------------------------------------------
@@ -2728,7 +3315,7 @@ let
 in
 stdenvNoCC.mkDerivation {
   pname = "boot-gardener";
-  version = "2.8.0";
+  version = "2.9.0";
 
   dontUnpack = true;
   dontBuild = true;
@@ -2751,7 +3338,7 @@ stdenvNoCC.mkDerivation {
   '';
 
   meta = with lib; {
-    description = "Pick, pin, prune, harvest, or garbage-collect NixOS generations in your Limine, systemd-boot, or GRUB boot menu, browse the config each was built from, or rescue a full /boot partition";
+    description = "Pick (roll back to), pin, prune, harvest, or garbage-collect NixOS generations in your Limine, systemd-boot, or GRUB boot menu, browse the config each was built from, or rescue a full /boot partition";
     platforms = platforms.linux;
     mainProgram = "boot-gardener";
   };
