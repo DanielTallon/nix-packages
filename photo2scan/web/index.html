@@ -653,6 +653,352 @@ const RASTER_LIB = {
   global: "htmlToImage", what: "Word reader",
 };
 
+// ---------- EMF pictures ----------
+
+// Word files often hold logos and letterheads as EMF, a Windows drawing format
+// that browsers can't show. This draws the parts of it such pictures use
+// (shapes, paths, curves, fills, clipping, bitmaps and plain text) onto a canvas.
+// Records it doesn't know are skipped. Returns the canvas.
+async function drawEmf(bytes) {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const i32 = o => dv.getInt32(o, true), u32 = o => dv.getUint32(o, true);
+  const i16 = o => dv.getInt16(o, true), f32 = o => dv.getFloat32(o, true);
+  const color = c => `rgb(${c & 255},${(c >> 8) & 255},${(c >> 16) & 255})`;
+
+  // The header gives the picture's bounds in device pixels, and the device's
+  // pixels per millimeter (for the metric map modes).
+  const pxPerMm = [i32(72) / i32(80), i32(76) / i32(84)];
+  let [left, top, right, bottom] = [8, 12, 16, 20].map(i32);
+  if (right < left || bottom < top) {  // no bounds: use the frame, in 0.01 mm
+    [left, top, right, bottom] = [24, 28, 32, 36].map((o, k) => i32(o) / 100 * pxPerMm[k % 2]);
+  }
+  const W = right - left + 1, H = bottom - top + 1;
+  const S = Math.min(4, 2400 / Math.max(W, H));  // output pixels per device pixel
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(W * S)); canvas.height = Math.max(1, Math.round(H * S));
+  const ctx = canvas.getContext("2d");
+
+  const stock = {
+    0x80000000: { brush: "#fff" }, 0x80000001: { brush: "#c0c0c0" }, 0x80000002: { brush: "#808080" },
+    0x80000003: { brush: "#404040" }, 0x80000004: { brush: "#000" }, 0x80000005: { brush: null },
+    0x80000006: { pen: { color: "#fff", width: 0 } }, 0x80000007: { pen: { color: "#000", width: 0 } },
+    0x80000008: { pen: null },
+  };
+  const objects = new Map();
+  let st = {
+    mapMode: 1, winOrg: [0, 0], winExt: [1, 1], vpOrg: [0, 0], vpExt: [1, 1],
+    xf: [1, 0, 0, 1, 0, 0],  // world transform: eM11 eM12 eM21 eM22 eDx eDy
+    pen: stock[0x80000007].pen, brush: "#fff", font: null, textColor: "#000", textAlign: 0,
+    fillRule: "evenodd", clip: [], cur: [0, 0],
+  };
+  const saved = [];
+
+  // Logical point → output pixel.
+  const scale = () => {
+    const m = st.mapMode;
+    if (m === 7 || m === 8) return [st.vpExt[0] / st.winExt[0], st.vpExt[1] / st.winExt[1]];
+    const mm = { 2: 0.1, 3: 0.01, 4: 0.254, 5: 0.0254, 6: 25.4 / 1440 }[m];
+    return mm ? [mm * pxPerMm[0], -mm * pxPerMm[1]] : [1, 1];
+  };
+  const out = (x, y) => {
+    const [a, b, c, d, e, f] = st.xf, [sx, sy] = scale();
+    const X = x * a + y * c + e, Y = x * b + y * d + f;
+    return [((X - st.winOrg[0]) * sx + st.vpOrg[0] - left) * S, ((Y - st.winOrg[1]) * sy + st.vpOrg[1] - top) * S];
+  };
+  const lengthScale = () => {
+    const [a, b, c, d] = st.xf, [sx, sy] = scale();
+    return Math.sqrt(Math.abs((a * d - b * c) * sx * sy)) * S;
+  };
+
+  // Points of a POLY* record: count at `o`, then 16- or 32-bit x, y pairs.
+  const points = (o, n, small) => Array.from({ length: n }, (_, k) =>
+    small ? [i16(o + 4 * k), i16(o + 4 * k + 2)] : [i32(o + 8 * k), i32(o + 8 * k + 4)]);
+
+  let path = null, open = false, lastPath = null;  // the path bracket, if any
+  const target = () => path || new Path2D();
+  const moveTo = (p, [x, y]) => { p.moveTo(...out(x, y)); st.cur = [x, y]; open = true; };
+  const lineTo = (p, [x, y]) => { if (!open) moveTo(p, st.cur); p.lineTo(...out(x, y)); st.cur = [x, y]; };
+  const curvesTo = (p, pts) => {
+    if (!open) moveTo(p, st.cur);
+    for (let k = 0; k + 2 < pts.length; k += 3) p.bezierCurveTo(...out(...pts[k]), ...out(...pts[k + 1]), ...out(...pts[k + 2]));
+    if (pts.length) st.cur = pts[pts.length - 1];
+  };
+  const withClip = draw => {
+    ctx.save();
+    for (const c of st.clip) ctx.clip(c.path, c.rule);
+    draw();
+    ctx.restore();
+  };
+  const paint = (p, fill, stroke) => withClip(() => {
+    if (fill && st.brush) { ctx.fillStyle = st.brush; ctx.fill(p, st.fillRule); }
+    if (stroke && st.pen) {
+      ctx.strokeStyle = st.pen.color;
+      ctx.lineWidth = Math.max(S, st.pen.width * lengthScale());
+      ctx.lineJoin = "round"; ctx.lineCap = "round";
+      ctx.stroke(p);
+    }
+  });
+  // Shapes drawn outside a path bracket are painted right away.
+  const shape = (p, fill = true) => { if (!path) paint(p, fill, true); };
+  const box = o => [i32(o), i32(o + 4), i32(o + 8), i32(o + 12)];
+  const rect = (p, [l, t, r, b]) => {
+    const pts = [[l, t], [r, t], [r, b], [l, b]].map(q => out(...q));
+    p.moveTo(...pts[0]); pts.slice(1).forEach(q => p.lineTo(...q)); p.closePath();
+  };
+  const ellipse = (p, [l, t, r, b]) => {
+    const [x0, y0] = out(l, t), [x1, y1] = out(r, b);
+    p.moveTo(Math.max(x0, x1), (y0 + y1) / 2);
+    p.ellipse((x0 + x1) / 2, (y0 + y1) / 2, Math.abs(x1 - x0) / 2, Math.abs(y1 - y0) / 2, 0, 0, 2 * Math.PI);
+    p.closePath();
+  };
+  const multiply = ([a, b, c, d, e, f], [A, B, C, D, E, F]) =>
+    [a * A + b * C, a * B + b * D, c * A + d * C, c * B + d * D, e * A + f * C + E, e * B + f * D + F];
+  // A DIB (header, palette and bits) becomes a .bmp the browser can decode.
+  const dib = (o, offBmi, cbBmi, offBits, cbBits) => {
+    const file = new Uint8Array(14 + cbBmi + cbBits), fv = new DataView(file.buffer);
+    file.set([0x42, 0x4d]); fv.setUint32(2, file.length, true); fv.setUint32(10, 14 + cbBmi, true);
+    file.set(bytes.subarray(o + offBmi, o + offBmi + cbBmi), 14);
+    file.set(bytes.subarray(o + offBits, o + offBits + cbBits), 14 + cbBmi);
+    return createImageBitmap(new Blob([file], { type: "image/bmp" }));
+  };
+  const blit = async (o, dest, src, bmi) => {
+    const [x0, y0] = out(dest[0], dest[1]), [x1, y1] = out(dest[0] + dest[2], dest[1] + dest[3]);
+    if (!bmi[1]) {  // no bitmap: fill the rectangle with the brush
+      if (st.brush) withClip(() => { ctx.fillStyle = st.brush; ctx.fillRect(x0, y0, x1 - x0, y1 - y0); });
+      return;
+    }
+    const image = await dib(o, ...bmi);
+    const bmpH = Math.abs(i32(o + bmi[0] + 8)), bottomUp = i32(o + bmi[0] + 8) > 0;
+    const [sx, sy, sw, sh] = [src[0], bottomUp ? bmpH - src[1] - src[3] : src[1], src[2], src[3]];
+    withClip(() => ctx.drawImage(image, sx, sy, sw, sh, x0, y0, x1 - x0, y1 - y0));
+  };
+
+  for (let o = u32(4); o + 8 <= bytes.length;) {
+    const type = u32(o), size = u32(o + 4), d = o + 8;
+    if (size < 8 || o + size > bytes.length) break;
+    switch (type) {
+      case 14: o = bytes.length; continue;                                      // EOF
+      case 9: st.winExt = [i32(d), i32(d + 4)]; break;                          // SETWINDOWEXTEX
+      case 10: st.winOrg = [i32(d), i32(d + 4)]; break;                         // SETWINDOWORGEX
+      case 11: st.vpExt = [i32(d), i32(d + 4)]; break;                          // SETVIEWPORTEXTEX
+      case 12: st.vpOrg = [i32(d), i32(d + 4)]; break;                          // SETVIEWPORTORGEX
+      case 17: st.mapMode = u32(d); break;                                      // SETMAPMODE
+      case 19: st.fillRule = u32(d) === 2 ? "nonzero" : "evenodd"; break;       // SETPOLYFILLMODE
+      case 22: st.textAlign = u32(d); break;                                    // SETTEXTALIGN
+      case 24: st.textColor = color(u32(d)); break;                             // SETTEXTCOLOR
+      case 33: saved.push({ ...st, clip: [...st.clip] }); break;                // SAVEDC
+      case 34: {                                                                // RESTOREDC
+        const n = i32(d), at = n < 0 ? saved.length + n : n - 1;
+        if (at >= 0 && at < saved.length) { st = saved[at]; saved.length = at; }
+        break;
+      }
+      case 35: st.xf = [0, 4, 8, 12, 16, 20].map(k => f32(d + k)); break;       // SETWORLDTRANSFORM
+      case 36: {                                                                // MODIFYWORLDTRANSFORM
+        const m = [0, 4, 8, 12, 16, 20].map(k => f32(d + k)), mode = u32(d + 24);
+        st.xf = mode === 1 ? [1, 0, 0, 1, 0, 0] : mode === 2 ? multiply(m, st.xf) : mode === 3 ? multiply(st.xf, m) : m;
+        break;
+      }
+      case 37: {                                                                // SELECTOBJECT
+        const obj = stock[u32(d)] || objects.get(u32(d));
+        if (obj && "pen" in obj) st.pen = obj.pen;
+        if (obj && "brush" in obj) st.brush = obj.brush;
+        if (obj && "font" in obj) st.font = obj.font;
+        break;
+      }
+      case 38:                                                                  // CREATEPEN
+        objects.set(u32(d), { pen: (u32(d + 4) & 15) === 5 ? null : { width: i32(d + 8), color: color(u32(d + 16)) } });
+        break;
+      case 95:                                                                  // EXTCREATEPEN
+        objects.set(u32(d), { pen: (u32(d + 20) & 15) === 5 || u32(d + 28) === 1 ? null : { width: u32(d + 24), color: color(u32(d + 32)) } });
+        break;
+      case 39:                                                                  // CREATEBRUSHINDIRECT
+        objects.set(u32(d), { brush: u32(d + 4) === 1 ? null : color(u32(d + 8)) });
+        break;
+      case 82: {                                                                // EXTCREATEFONTINDIRECTW
+        const face = String.fromCharCode(...Array.from({ length: 32 }, (_, k) => dv.getUint16(d + 32 + 2 * k, true))).replace(/\0.*$/s, "");
+        objects.set(u32(d), { font: { height: i32(d + 4), weight: i32(d + 20) || 400, italic: bytes[d + 24] !== 0, face } });
+        break;
+      }
+      case 40: objects.delete(u32(d)); break;                                   // DELETEOBJECT
+      case 27: if (path) moveTo(path, [i32(d), i32(d + 4)]); else st.cur = [i32(d), i32(d + 4)]; break;  // MOVETOEX
+      case 54: { const p = target(); if (!path) moveTo(p, st.cur); lineTo(p, [i32(d), i32(d + 4)]); shape(p, false); break; }  // LINETO
+      case 6: case 89: case 5: case 88: {                                       // POLYLINETO(16), POLYBEZIERTO(16)
+        const pts = points(d + 20, u32(d + 16), type > 80), p = target();
+        if (!path) moveTo(p, st.cur);
+        if (type === 6 || type === 89) pts.forEach(q => lineTo(p, q)); else curvesTo(p, pts);
+        shape(p, false);
+        break;
+      }
+      case 4: case 87: case 2: case 85: case 3: case 86: {                      // POLYLINE, POLYBEZIER, POLYGON (16)
+        const pts = points(d + 20, u32(d + 16), type > 80), p = target();
+        if (!pts.length) break;
+        const keep = st.cur;
+        moveTo(p, pts[0]);
+        if (type === 2 || type === 85) curvesTo(p, pts.slice(1)); else pts.slice(1).forEach(q => lineTo(p, q));
+        if (type === 3 || type === 86) { p.closePath(); shape(p); } else shape(p, false);
+        if (!path) st.cur = keep;
+        break;
+      }
+      case 7: case 90: case 8: case 91: {                                       // POLYPOLYLINE, POLYPOLYGON (16)
+        const n = u32(d + 16), counts = Array.from({ length: n }, (_, k) => u32(d + 24 + 4 * k));
+        let at = d + 24 + 4 * n;
+        const p = target();
+        for (const c of counts) {
+          const pts = points(at, c, type > 80);
+          at += c * (type > 80 ? 4 : 8);
+          if (!pts.length) continue;
+          moveTo(p, pts[0]); pts.slice(1).forEach(q => lineTo(p, q));
+          if (type === 8 || type === 91) p.closePath();
+        }
+        shape(p, type === 8 || type === 91);
+        break;
+      }
+      case 43: { const p = target(); rect(p, box(d)); shape(p); break; }        // RECTANGLE
+      case 44: { const p = target(); rect(p, box(d)); shape(p); break; }        // ROUNDRECT (drawn square)
+      case 42: { const p = target(); ellipse(p, box(d)); shape(p); break; }     // ELLIPSE
+      case 59: path = new Path2D(); open = false; break;                        // BEGINPATH
+      case 60: lastPath = path; path = null; break;                             // ENDPATH
+      case 68: path = lastPath = null; break;                                   // ABORTPATH
+      case 61: if (path) { path.closePath(); } break;                           // CLOSEFIGURE
+      case 62: if (lastPath) paint(lastPath, true, false); break;               // FILLPATH
+      case 63: if (lastPath) paint(lastPath, true, true); break;                // STROKEANDFILLPATH
+      case 64: if (lastPath) paint(lastPath, false, true); break;               // STROKEPATH
+      case 67:                                                                  // SELECTCLIPPATH
+        if (lastPath) {
+          const c = { path: lastPath, rule: st.fillRule }, mode = u32(d);
+          if (mode === 5) st.clip = [c]; else if (mode === 1) st.clip = [...st.clip, c];
+        }
+        break;
+      case 30: { const p = new Path2D(); rect(p, box(d)); st.clip = [...st.clip, { path: p, rule: "nonzero" }]; break; }  // INTERSECTCLIPRECT
+      case 75: {                                                                // EXTSELECTCLIPRGN
+        const cb = u32(d), mode = u32(d + 4);
+        if (mode === 5 && cb === 0) { st.clip = []; break; }
+        if (mode !== 5 && mode !== 1) break;
+        const p = new Path2D(), n = u32(d + 8 + 8);
+        for (let k = 0; k < n; k++) {  // rectangles in device pixels
+          const [l, t, r, b] = box(d + 8 + 32 + 16 * k);
+          p.rect((l - left) * S, (t - top) * S, (r - l) * S, (b - t) * S);
+        }
+        st.clip = mode === 5 ? [{ path: p, rule: "nonzero" }] : [...st.clip, { path: p, rule: "nonzero" }];
+        break;
+      }
+      case 81:                                                                  // STRETCHDIBITS
+        await blit(o, [i32(o + 24), i32(o + 28), i32(o + 72), i32(o + 76)],
+          [i32(o + 32), i32(o + 36), i32(o + 40), i32(o + 44)], [u32(o + 48), u32(o + 52), u32(o + 56), u32(o + 60)]);
+        break;
+      case 76: case 77: {                                                       // BITBLT, STRETCHBLT
+        const dest = [i32(o + 24), i32(o + 28), i32(o + 32), i32(o + 36)];
+        const src = [i32(o + 44), i32(o + 48), ...(type === 77 ? [i32(o + 100), i32(o + 104)] : [dest[2], dest[3]])];
+        await blit(o, dest, src, [u32(o + 84), u32(o + 88), u32(o + 92), u32(o + 96)]);
+        break;
+      }
+      case 84: {                                                                // EXTTEXTOUTW
+        const n = u32(o + 44), off = u32(o + 48);
+        const text = String.fromCharCode(...Array.from({ length: n }, (_, k) => dv.getUint16(o + off + 2 * k, true)));
+        const f = st.font || { height: -12, weight: 400, italic: false, face: "Arial" };
+        const sizePx = Math.max(1, Math.abs(f.height) * lengthScale());
+        const [x, y] = out(i32(o + 36), i32(o + 40));
+        const a = st.textAlign;
+        withClip(() => {
+          ctx.font = `${f.italic ? "italic " : ""}${f.weight} ${sizePx}px "${f.face}", sans-serif`;
+          ctx.fillStyle = st.textColor;
+          ctx.textAlign = (a & 6) === 6 ? "center" : (a & 2) ? "right" : "left";
+          ctx.textBaseline = (a & 24) === 24 ? "alphabetic" : (a & 8) ? "bottom" : "top";
+          ctx.fillText(text, x, y);
+        });
+        break;
+      }
+    }
+    o += size;
+  }
+  return canvas;
+}
+
+// Replace each EMF picture under `root` with a PNG drawing of it. Returns how
+// many couldn't be drawn.
+async function convertEmfImages(root) {
+  let failed = 0;
+  for (const img of root.querySelectorAll("img")) {
+    const m = /^data:[^,]*;base64,(.*)$/.exec(img.getAttribute("src") || "");
+    if (!m) continue;
+    const bytes = Uint8Array.from(atob(m[1]), c => c.charCodeAt(0));
+    const dv = new DataView(bytes.buffer);
+    // An EMF starts with a header record (type 1) whose signature is " EMF".
+    if (bytes.length < 88 || dv.getUint32(0, true) !== 1 || dv.getUint32(40, true) !== 0x464d4520) continue;
+    try {
+      img.src = (await drawEmf(bytes)).toDataURL("image/png");
+    } catch (e) {
+      console.warn("photo2scan: couldn't draw an EMF picture", e);
+      failed++;
+    }
+  }
+  return failed;
+}
+
+// Floating shapes and text boxes come through as VML styles like
+// "position:absolute; margin-left:484.5pt; mso-position-horizontal-relative:page".
+// docx-preview leaves them where the text starts, so the margins count from the
+// text instead of from the paper's edge (or the page margin), and a box near
+// the right edge ends up past it. Move those to where Word puts them.
+function placeFloatingShapes(root) {
+  for (const section of root.querySelectorAll("section.docx")) {
+    const sr = section.getBoundingClientRect(), cs = getComputedStyle(section);
+    const pad = { x: parseFloat(cs.paddingLeft), y: parseFloat(cs.paddingTop) };
+    for (const el of section.querySelectorAll("[style*='mso-position-']")) {
+      const css = el.getAttribute("style");
+      const get = name => (new RegExp(`(?:^|;)\\s*${name}\\s*:\\s*([^;]+)`, "i").exec(css) || [])[1]?.trim().toLowerCase();
+      if (get("position") !== "absolute") continue;
+      // `left` and `top` count from the nearest positioned ancestor.
+      let box = el.parentElement;
+      while (box !== section && getComputedStyle(box).position === "static") box = box.parentElement;
+      const br = box.getBoundingClientRect();
+      for (const [axis, side, margin, start] of [["x", "left", "margin-left", br.left - sr.left], ["y", "top", "margin-top", br.top - sr.top]]) {
+        const from = get(`mso-position-${axis === "x" ? "horizontal" : "vertical"}-relative`);
+        const origin = from === "page" ? 0 : from === "margin" ? pad[axis] : null;
+        if (origin === null) continue;  // relative to the text or paragraph: already right
+        el.style[side] = `calc(${get(margin) || "0px"} + ${origin - start}px)`;
+        el.style[axis === "x" ? "marginLeft" : "marginTop"] = "0";
+      }
+    }
+  }
+}
+
+// html-to-image copies each element's computed style into the picture, but not
+// for HTML inside an SVG, which is how docx-preview draws text boxes: there
+// only inline styles survive, so paragraphs lose docx-preview's `margin: 0` and
+// spread out. Write the styles that shape text inline for those.
+function inlineTextBoxStyles(root) {
+  const props = [
+    "display", "margin-top", "margin-right", "margin-bottom", "margin-left",
+    "padding-top", "padding-right", "padding-bottom", "padding-left", "min-height",
+    "font-family", "font-size", "font-weight", "font-style", "line-height", "letter-spacing",
+    "color", "background-color", "text-align", "text-indent", "white-space", "vertical-align",
+    "text-decoration-line", "text-decoration-color", "text-decoration-style",
+  ];
+  const els = [...root.querySelectorAll("foreignObject *")];
+  const values = els.map(el => { const cs = getComputedStyle(el); return props.map(p => cs.getPropertyValue(p)); });
+  els.forEach((el, k) => props.forEach((p, j) => el.style.setProperty(p, values[k][j])));
+}
+
+// Word's usual fonts (Aptos, Calibri, Segoe UI…) are often missing outside
+// Windows and Office, and a missing font with no fallback turns into the
+// browser's default serif font. docx-preview also lists the East Asian font
+// after the Latin one ("Segoe UI", "Times New Roman"), which Word only uses for
+// East Asian characters, so keep just the first font and add a fallback of the
+// same kind.
+function addFontFallbacks(root) {
+  const generic = f => /mono|courier|consolas/i.test(f) ? "monospace"
+    : /times|georgia|cambria|garamond|palatino|antiqua|baskerville|bodoni|century|serif/i.test(f) && !/sans/i.test(f) ? "serif"
+    : "sans-serif";
+  const fix = style => {
+    const first = style.fontFamily.split(",")[0].trim();
+    if (first && !/^(serif|sans-serif|monospace)$/.test(first)) style.fontFamily = `${first}, ${generic(first)}`;
+  };
+  for (const s of root.querySelectorAll("style"))
+    for (const rule of s.sheet?.cssRules || []) if (rule instanceof CSSStyleRule) fix(rule.style);
+  for (const el of root.querySelectorAll("[style]")) fix(el.style);
+}
+
 const isDocx = file => /\.docx$/i.test(file.name) ||
   file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const isOldDoc = file => /\.doc$/i.test(file.name) || file.type === "application/msword";
@@ -661,7 +1007,8 @@ const isOldDoc = file => /\.doc$/i.test(file.name) || file.type === "application
 // a part that runs longer than its page is split here, between paragraphs or
 // table rows. Returns the [start, end) heights, in the section's pixels, of
 // each page's slice; the first slice starts at the top of the section (with its
-// header) and the last runs to the bottom (with its footer).
+// header) and the last ends where the text does (the footer is added to every
+// page separately).
 function sliceSection(section, pageH) {
   const total = section.offsetHeight;
   if (total <= pageH + 1) return [[0, total]];
@@ -669,9 +1016,13 @@ function sliceSection(section, pageH) {
   const padTop = parseFloat(cs.paddingTop), padBottom = parseFloat(cs.paddingBottom);
   const room = Math.max(50, pageH - padTop - padBottom);
   const top0 = section.getBoundingClientRect().top;
+  const article = section.querySelector(":scope > article");
+  // Empty paragraphs don't get a page of their own; table rows always count.
   const blocks = [];
-  for (const el of section.querySelector(":scope > article")?.children || [])
-    if (el.tagName === "TABLE") blocks.push(...el.rows); else blocks.push(el);
+  for (const el of article?.children || [])
+    if (el.tagName === "TABLE") blocks.push(...el.rows);
+    else if (el.textContent.trim() || el.querySelector("img, svg, canvas, table")) blocks.push(el);
+  const end = blocks.length ? blocks[blocks.length - 1].getBoundingClientRect().bottom - top0 : padTop;
   const breaks = [];
   let start = padTop;
   for (const el of blocks) {
@@ -679,14 +1030,13 @@ function sliceSection(section, pageH) {
     if (bottom - start > room && top > start + 1) { breaks.push(top); start = top; }
     while (bottom - start > room) { start += room; breaks.push(start); }  // taller than a page
   }
-  // The footer has to fit under the last slice.
-  if (total - start > pageH - padTop) breaks.push(start = total - (pageH - padTop));
-  const edges = [0, ...breaks, total];
+  if (end - start > room) breaks.push(start = end - room);  // anything past the last block
+  const edges = [0, ...breaks, end];
   return edges.slice(0, -1).map((s, i) => [s, edges[i + 1]]);
 }
 
 // Yields [page number, page count, bitmap] for each page of a Word file.
-async function* docxPages(file) {
+async function* docxPages(file, warn) {
   const ready = !!window.docx && !!window.htmlToImage;
   if (!ready) { status(`Loading Word support (one-time, about 200 KB)…`); await tick(); }
   const [docx, htmlToImage] = await Promise.all([
@@ -694,8 +1044,10 @@ async function* docxPages(file) {
     loadLib(RASTER_LIB),
   ]);
   // Lay the document out off screen; it has to be in the page to be measured.
+  // `all: initial` keeps this page's own styles (its 1.5 line spacing, font and
+  // dark-mode text color) from leaking into the document.
   const host = document.createElement("div");
-  host.style.cssText = "position: fixed; left: -100000px; top: 0; background: white;";
+  host.style.cssText = "all: initial; display: block; position: fixed; left: -100000px; top: 0; background: white; color: black;";
   document.body.appendChild(host);
   try {
     status(`Reading ${file.name}…`); await tick();
@@ -703,6 +1055,9 @@ async function* docxPages(file) {
       inWrapper: false, breakPages: true, ignoreLastRenderedPageBreak: false,
       useBase64URL: true, experimental: true,
     }).catch(() => { throw new Error("it doesn't look like a Word file, or it's damaged"); });
+    addFontFallbacks(host);
+    const missing = await convertEmfImages(host);
+    if (missing) warn(`${missing} picture${missing === 1 ? "" : "s"} in ${file.name} couldn't be drawn.`);
     const sections = [...host.querySelectorAll("section.docx")];
     if (!sections.length) throw new Error("no pages found in it");
     // Some files (from Google Docs or pandoc, say) leave out the page size;
@@ -713,6 +1068,8 @@ async function* docxPages(file) {
       if (!s.style.minHeight) s.style.minHeight = paperH;
       if (!s.style.paddingTop) s.style.padding = "1in";
     }
+    placeFloatingShapes(host);
+    inlineTextBoxStyles(host);
     const probe = document.createElement("div");
     host.appendChild(probe);
     const plan = sections.flatMap(section => {
@@ -725,7 +1082,7 @@ async function* docxPages(file) {
     for (const [n, p] of plan.entries()) {
       status(`Reading ${file.name}, page ${n + 1} of ${plan.length}…`); await tick();
       let node = p.section, frame = null;
-      if (!(p.first && p.last)) {
+      if (p.section.offsetHeight > p.pageH + 1) {
         // A page cut from a longer section: its slice of the body, plus the
         // section's header (which sits in the top margin) and footer (in the
         // bottom margin), each shown through a window onto a copy.
@@ -819,7 +1176,7 @@ async function addFiles(files) {
   for (const file of list) {
     status(`Opening ${file.name}…`); await tick();
     try {
-      const doc = isPdf(file) ? pdfPages(file) : isDocx(file) ? docxPages(file) : null;
+      const doc = isPdf(file) ? pdfPages(file) : isDocx(file) ? docxPages(file, msg => failed.push(msg)) : null;
       if (isOldDoc(file)) {
         throw new Error("only the newer .docx Word files work. Open it in Word and use Save As → Word Document (.docx)");
       } else if (doc) {

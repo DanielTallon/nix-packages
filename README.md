@@ -290,8 +290,9 @@ pages (about 200 KB together), pinned and checked by hash. The layout is the
 browser's, not Word's, so it is close but not exact: fonts the computer doesn't
 have are swapped for similar ones, and where Word didn't save its page breaks in
 the file (Google Docs exports, for example), the page splits between paragraphs
-or table rows on its own. Old `.doc` files aren't supported; save them as
-`.docx` first.
+or table rows on its own. Logos and letterheads saved as EMF (a Windows drawing
+format browsers can't show) are drawn by the page's own EMF reader. Old `.doc`
+files aren't supported; save them as `.docx` first.
 
 The `pages` workflow publishes it whenever that file changes on `main`. It needs
 **Settings → Pages → Source: GitHub Actions** set once on the repository.
