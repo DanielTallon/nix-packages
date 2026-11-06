@@ -10,7 +10,7 @@ use and shared here in case they're useful to anyone else:
 - **[`nixed-error`](./nixed-error)** — explains a failed NixOS rebuild in plain words: what went wrong, the file and line, whether it's your config, upstream, or your machine, and how to fix it. Rule-based (no LLM, no network). Own project, still in testing.
 - **[`wallpaperpicker`](./wallpaperpicker)** — [kwepaperpicker](https://gitlab.com/theblackdon/qs-kwepaperpicker), packaged here as `wallpaperpicker`, a swatch-deck wallpaper picker for Quickshell. Brings its own icon font, and on KDE Plasma hands the chosen wallpaper to Plasma by default. `wallpaperpicker-nixgl` is the same picker for Nix on other distros. See [wallpaperpicker](#wallpaperpicker) below. GPL-3.0-or-later.
 - **[`flow-desktop`](./flow-desktop)** — [Flow Desktop](https://github.com/Flow-Tube/Flow-Desktop), a privacy-respecting YouTube and YouTube Music client (Tauri 2), built from source. Based on [olafkfreund/nixos-FlowTube](https://github.com/olafkfreund/nixos-FlowTube)'s package, tracking upstream main, plus a local patch that adds thumbnail previews to the seekbar. GPL-3.0.
-- **[`photo2scan`](./photo2scan)** — turns phone photos of paper pages into a scanned-looking PDF: finds the page, undoes the camera angle, evens out the lighting. Handy for forms someone photographed at an angle and sent you. Also a [web page](https://danieltallon.github.io/nix-packages/photo2scan/) that works on Windows, Linux and phones with nothing to install, and also takes existing PDFs. See [photo2scan](#photo2scan) below. Own project, MIT licensed.
+- **[`photo2scan`](./photo2scan)** — turns phone photos of paper pages into a scanned-looking PDF: finds the page, undoes the camera angle, evens out the lighting. Handy for forms someone photographed at an angle and sent you. Also a [web page](https://danieltallon.github.io/nix-packages/photo2scan/) that works on Windows, Linux and phones with nothing to install, and also takes existing PDFs and Word files. See [photo2scan](#photo2scan) below. Own project, MIT licensed.
 
 Each package is exposed on its own — installing or building one never pulls in the others.
 
@@ -266,7 +266,7 @@ Wineland 11.0-20260930 and newer restores DLSS, frame generation, ray tracing an
 ### On the web (any computer, including Windows)
 
 Open **<https://danieltallon.github.io/nix-packages/photo2scan/>**, click
-**Choose files…** (photos or PDFs), drag any blue corner the page finder got wrong, set the look (gray, black and
+**Choose files…** (photos, PDFs or Word files), drag any blue corner the page finder got wrong, set the look (gray, black and
 white or color, plus **Lighter / darker** and **Contrast** sliders, like a
 scanner's; double-click a slider to reset it), and click **Save PDF**. Everything runs in the browser; files are never uploaded. It is
 one self-contained file, [`photo2scan/web/index.html`](./photo2scan/web/index.html),
@@ -281,6 +281,17 @@ drag, and is straightened and cleaned like a photo. That suits PDFs a phone made
 from a photo, or an old scan that needs evening out. The first PDF fetches
 [pdf.js](https://mozilla.github.io/pdf.js/) (about 500 KB), also pinned and
 checked by hash. Password-protected PDFs aren't supported.
+
+Word files (`.docx`) work too, so a typed document can be turned into a PDF
+(pick **Original (no scanner effects)** to keep it looking as typed). The first
+one fetches [docx-preview](https://github.com/VolodymyrBaydalka/docxjs) with
+JSZip, plus [html-to-image](https://github.com/bubkoo/html-to-image) to draw the
+pages (about 200 KB together), pinned and checked by hash. The layout is the
+browser's, not Word's, so it is close but not exact: fonts the computer doesn't
+have are swapped for similar ones, and where Word didn't save its page breaks in
+the file (Google Docs exports, for example), the page splits between paragraphs
+or table rows on its own. Old `.doc` files aren't supported; save them as
+`.docx` first.
 
 The `pages` workflow publishes it whenever that file changes on `main`. It needs
 **Settings → Pages → Source: GitHub Actions** set once on the repository.

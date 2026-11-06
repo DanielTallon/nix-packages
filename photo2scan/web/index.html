@@ -88,12 +88,12 @@
 <main>
   <h1>photo2scan</h1>
   <p class="lede">Turn phone photos of paper pages into a straightened, scanned-looking PDF.
-    PDFs work too: each of their pages is straightened and cleaned the same way.
+    PDFs and Word files (.docx) work too: each of their pages is straightened and cleaned the same way.
     Everything happens in this browser; your files are never uploaded.</p>
 
   <div class="toolbar">
     <button id="pick" class="primary">Choose files…</button>
-    <input id="files" type="file" accept="image/*,.heic,.heif,application/pdf,.pdf" multiple hidden>
+    <input id="files" type="file" accept="image/*,.heic,.heif,application/pdf,.pdf,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.doc,application/msword" multiple hidden>
     <label>Look
       <select id="mode">
         <option value="gray">Gray</option>
@@ -126,7 +126,7 @@
   </div>
   <div id="status"></div>
 
-  <div id="drop">Drop photos or PDFs here, or use <strong>Choose files…</strong>.<br>
+  <div id="drop">Drop photos, PDFs or Word files here, or use <strong>Choose files…</strong>.<br>
     Pages appear in the order you add them; use the arrows to reorder.</div>
   <div id="pages"></div>
 
@@ -566,7 +566,7 @@ const pages = [];
 const status = msg => { $("status").textContent = msg; };
 const tick = () => new Promise(r => setTimeout(r, 0));
 
-// Libraries for HEIC and PDF are fetched from jsDelivr the first time they're
+// Libraries for HEIC, PDF and Word are fetched from jsDelivr the first time they're
 // needed, pinned to a version and checked by hash.
 const loaded = new Map();
 function loadLib(lib) {
@@ -634,6 +634,145 @@ function loadPdfLib() {
 
 const isPdf = file => /\.pdf$/i.test(file.name) || file.type === "application/pdf";
 
+// Word files (.docx) are laid out as HTML pages by docx-preview (which needs
+// JSZip), then each page is drawn into a picture with html-to-image (about
+// 200 KB in all).
+const JSZIP_LIB = {
+  src: "https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js",
+  integrity: "sha384-+mbV2IY1Zk/X1p/nWllGySJSUN8uMs+gUAN10Or95UBH0fpj6GfKgPmgC5EXieXG",
+  global: "JSZip", what: "Word reader",
+};
+const DOCX_LIB = {
+  src: "https://cdn.jsdelivr.net/npm/docx-preview@0.4.1/dist/docx-preview.min.js",
+  integrity: "sha384-DifWB1GSGsQgwTegPEbGdEMnGZpmfhUsx9A3WuHv+rfQVCFXMhawW/v4AZcP1FzL",
+  global: "docx", what: "Word reader",
+};
+const RASTER_LIB = {
+  src: "https://cdn.jsdelivr.net/npm/html-to-image@1.11.13/dist/html-to-image.js",
+  integrity: "sha384-Tha/42qsYmpYmQ07pX+nJzkKumO0BzKJxK/uzVc7xyBQxVCUgQBhQIG8L7vXK+9C",
+  global: "htmlToImage", what: "Word reader",
+};
+
+const isDocx = file => /\.docx$/i.test(file.name) ||
+  file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+const isOldDoc = file => /\.doc$/i.test(file.name) || file.type === "application/msword";
+
+// docx-preview only starts a new page at page breaks Word saved in the file, so
+// a part that runs longer than its page is split here, between paragraphs or
+// table rows. Returns the [start, end) heights, in the section's pixels, of
+// each page's slice; the first slice starts at the top of the section (with its
+// header) and the last runs to the bottom (with its footer).
+function sliceSection(section, pageH) {
+  const total = section.offsetHeight;
+  if (total <= pageH + 1) return [[0, total]];
+  const cs = getComputedStyle(section);
+  const padTop = parseFloat(cs.paddingTop), padBottom = parseFloat(cs.paddingBottom);
+  const room = Math.max(50, pageH - padTop - padBottom);
+  const top0 = section.getBoundingClientRect().top;
+  const blocks = [];
+  for (const el of section.querySelector(":scope > article")?.children || [])
+    if (el.tagName === "TABLE") blocks.push(...el.rows); else blocks.push(el);
+  const breaks = [];
+  let start = padTop;
+  for (const el of blocks) {
+    const r = el.getBoundingClientRect(), top = r.top - top0, bottom = r.bottom - top0;
+    if (bottom - start > room && top > start + 1) { breaks.push(top); start = top; }
+    while (bottom - start > room) { start += room; breaks.push(start); }  // taller than a page
+  }
+  // The footer has to fit under the last slice.
+  if (total - start > pageH - padTop) breaks.push(start = total - (pageH - padTop));
+  const edges = [0, ...breaks, total];
+  return edges.slice(0, -1).map((s, i) => [s, edges[i + 1]]);
+}
+
+// Yields [page number, page count, bitmap] for each page of a Word file.
+async function* docxPages(file) {
+  const ready = !!window.docx && !!window.htmlToImage;
+  if (!ready) { status(`Loading Word support (one-time, about 200 KB)…`); await tick(); }
+  const [docx, htmlToImage] = await Promise.all([
+    loadLib(JSZIP_LIB).then(() => loadLib(DOCX_LIB)),  // docx-preview picks up JSZip as it loads
+    loadLib(RASTER_LIB),
+  ]);
+  // Lay the document out off screen; it has to be in the page to be measured.
+  const host = document.createElement("div");
+  host.style.cssText = "position: fixed; left: -100000px; top: 0; background: white;";
+  document.body.appendChild(host);
+  try {
+    status(`Reading ${file.name}…`); await tick();
+    await docx.renderAsync(await file.arrayBuffer(), host, null, {
+      inWrapper: false, breakPages: true, ignoreLastRenderedPageBreak: false,
+      useBase64URL: true, experimental: true,
+    }).catch(() => { throw new Error("it doesn't look like a Word file, or it's damaged"); });
+    const sections = [...host.querySelectorAll("section.docx")];
+    if (!sections.length) throw new Error("no pages found in it");
+    // Some files (from Google Docs or pandoc, say) leave out the page size;
+    // use the chosen paper with one-inch margins.
+    const [paperW, paperH] = $("paper").value === "a4" ? ["210mm", "297mm"] : ["8.5in", "11in"];
+    for (const s of sections) {
+      if (!s.style.width) s.style.width = paperW;
+      if (!s.style.minHeight) s.style.minHeight = paperH;
+      if (!s.style.paddingTop) s.style.padding = "1in";
+    }
+    const probe = document.createElement("div");
+    host.appendChild(probe);
+    const plan = sections.flatMap(section => {
+      probe.style.height = section.style.minHeight || "11in";
+      const pageH = probe.offsetHeight || section.offsetHeight;
+      const slices = sliceSection(section, pageH);
+      return slices.map(([s, e], i) => ({ section, pageH, s, e, first: i === 0, last: i === slices.length - 1 }));
+    });
+    probe.remove();
+    for (const [n, p] of plan.entries()) {
+      status(`Reading ${file.name}, page ${n + 1} of ${plan.length}…`); await tick();
+      let node = p.section, frame = null;
+      if (!(p.first && p.last)) {
+        // A page cut from a longer section: its slice of the body, plus the
+        // section's header (which sits in the top margin) and footer (in the
+        // bottom margin), each shown through a window onto a copy.
+        const cs = getComputedStyle(p.section);
+        const padTop = parseFloat(cs.paddingTop), padBottom = parseFloat(cs.paddingBottom);
+        const total = p.section.offsetHeight;
+        frame = document.createElement("div");
+        frame.style.cssText = `position: relative; overflow: hidden; background: white; width: ${p.section.offsetWidth}px; height: ${p.pageH}px;`;
+        // Show the section's [from, from + h) at `y` on the page.
+        const show = (y, from, h) => {
+          const win = document.createElement("div");
+          win.style.cssText = `position: absolute; left: 0; right: 0; top: ${y}px; height: ${h}px; overflow: hidden;`;
+          const copy = p.section.cloneNode(true);
+          Object.assign(copy.style, { position: "absolute", left: "0", top: `${-from}px`, margin: "0" });
+          win.appendChild(copy);
+          frame.appendChild(win);
+        };
+        const end = Math.min(p.e, total - padBottom);
+        if (p.first) show(0, 0, end);
+        else { show(0, 0, padTop); show(padTop, p.s, end - p.s); }
+        show(p.pageH - padBottom, total - padBottom, padBottom);
+        host.appendChild(frame);
+        node = frame;
+      }
+      const w = node.offsetWidth, h = node.offsetHeight, scale = PDF_SIDE / Math.max(w, h);
+      // html-to-image's own toCanvas waits for an animation frame, which never
+      // comes while the tab is in the background, so draw its SVG here.
+      const svg = await htmlToImage.toSvg(node, { backgroundColor: "white", width: w, height: h });
+      if (frame) frame.remove();
+      const img = new Image();
+      await new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = () => reject(new Error("couldn't draw a page"));
+        img.src = svg;
+      });
+      const canvas = new OffscreenCanvas(Math.round(w * scale), Math.round(h * scale));
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "white";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      yield [n + 1, plan.length, await createImageBitmap(canvas)];
+    }
+  } finally {
+    host.remove();
+  }
+}
+
 // Yields [page number, page count, bitmap] for each page of a PDF.
 async function* pdfPages(file) {
   if (!pdfLib) { status(`Loading PDF support (one-time, about 500 KB)…`); await tick(); }
@@ -675,18 +814,22 @@ function addPage(name, bitmap) {
 }
 
 async function addFiles(files) {
-  const list = [...files].filter(f => f.type.startsWith("image/") || isHeicName(f) || isPdf(f));
+  const list = [...files].filter(f => f.type.startsWith("image/") || isHeicName(f) || isPdf(f) || isDocx(f) || isOldDoc(f));
   const failed = [];
   for (const file of list) {
     status(`Opening ${file.name}…`); await tick();
     try {
-      if (isPdf(file)) {
-        for await (const [n, count, bitmap] of pdfPages(file)) addPage(count > 1 ? `${file.name}, page ${n}` : file.name, bitmap);
+      const doc = isPdf(file) ? pdfPages(file) : isDocx(file) ? docxPages(file) : null;
+      if (isOldDoc(file)) {
+        throw new Error("only the newer .docx Word files work. Open it in Word and use Save As → Word Document (.docx)");
+      } else if (doc) {
+        for await (const [n, count, bitmap] of doc) addPage(count > 1 ? `${file.name}, page ${n}` : file.name, bitmap);
       } else {
         addPage(file.name, await openImage(file));
       }
     } catch (e) {
-      failed.push(`Couldn't open ${file.name}` + (isHeicName(file) || isPdf(file) ? `: ${String(e.message || e).replace(/\.$/, "")}.` : "."));
+      const explain = isHeicName(file) || isPdf(file) || isDocx(file) || isOldDoc(file);
+      failed.push(`Couldn't open ${file.name}` + (explain ? `: ${String(e.message || e).replace(/\.$/, "")}.` : "."));
     }
   }
   if (list.length) status([`${pages.length} page${pages.length === 1 ? "" : "s"} ready.`, ...failed].join(" "));
