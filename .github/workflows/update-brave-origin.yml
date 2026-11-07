@@ -1,0 +1,46 @@
+name: update-brave-origin
+
+on:
+  schedule:
+    # Twice a day: Brave ships Chromium security fixes often, sometimes within a day.
+    - cron: "0 */12 * * *"
+  workflow_dispatch: # "Run workflow" button for manual checks
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Check Brave's apt repo for a new release
+        run: ./brave-origin/update.sh
+
+      - name: Detect changes
+        id: diff
+        run: |
+          if git diff --quiet -- brave-origin/sources.json; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Never commit a bump that doesn't build. This downloads the x86_64 .deb,
+      # checks it against the new hash, and runs `brave --version` on the result.
+      - name: Verify it builds
+        if: steps.diff.outputs.changed == 'true'
+        run: nix build .#brave-origin --no-link -L
+
+      - name: Commit and push
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          version=$(jq -r .version brave-origin/sources.json)
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add brave-origin/sources.json
+          git commit -m "brave-origin: update to $version"
+          git push
