@@ -3173,12 +3173,15 @@ let
     [[rule]]
     id = "network"
     title = "Download failed (network)"
-    match = ''''(?:unable to download|Could(?:n't| not) resolve host|Connection timed out|SSL connect error|Failed to connect to|HTTP error 50\d|error: cannot connect to socket)''''
+    match = ''''(?:unable to download|Could(?:n't| not) resolve host|Connection timed out|SSL connect error|Failed to connect to|HTTP error 50\d|returned error: 5\d\d|error: cannot connect to socket)''''
     priority = 85
     scope = "both"
     blame = "system"
     explain = "Nix couldn't download something. Your internet connection, DNS, or the server itself had a problem."
-    fix = "Check your connection and try again. If one server is down, `--option substituters https://cache.nixos.org` can help."
+    fix = """
+    Check your connection and try again. A 5xx error (500-504) means the server failed, not you: wait a while and retry.
+    If one binary cache is down, `--option substituters https://cache.nixos.org` can help.
+    """
 
     [[rule]]
     id = "bootloader"
