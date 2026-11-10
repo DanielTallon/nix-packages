@@ -18,6 +18,11 @@ let
       <dir>${material-symbols}/share/fonts</dir>
     </fontconfig>
   '';
+
+  # matugen's scheme type: how bold the colors are. Every option is described
+  # at the top of the dotfiles' modules/desktop/wallpaper-colors.nix, which
+  # has its own matugenScheme for the login re-apply: keep the two the same.
+  matugenScheme = "scheme-vibrant";
 in
 stdenvNoCC.mkDerivation (finalAttrs: {
   pname = "wallpaperpicker";
@@ -58,6 +63,21 @@ stdenvNoCC.mkDerivation (finalAttrs: {
       --replace-fail 'readonly property string command: SettingsConfig.wallpaperCommand.trim()' \
                      'readonly property string savedCommand: SettingsConfig.wallpaperCommand.trim()
     readonly property string command: !SettingsConfig.plasma && savedCommand.startsWith("plasma-apply-wallpaperimage") ? "" : savedCommand'
+
+    # matugenScheme instead of matugen's default (tonal spot), which mutes the
+    # wallpaper's colors. Both the scheme the desktop gets and the dry runs
+    # the swatch cards are dressed in use it, so the cards still show what
+    # each wallpaper will set. The palette cache's version names the scheme,
+    # so changing it makes the picker read every wallpaper again.
+    substituteInPlace scripts/wallpaper-apply \
+      --replace-fail 'matugen image "$still" --source-color-index 0' \
+                     'matugen image "$still" --type ${matugenScheme} --source-color-index 0'
+    substituteInPlace scripts/wallpaper-palettes.py \
+      --replace-fail '"--source-color-index", "0", "--dry-run"' \
+                     '"--type", "${matugenScheme}", "--source-color-index", "0", "--dry-run"'
+    substituteInPlace services/WallpaperSwatches.qml \
+      --replace-fail 'JSON.stringify({ version: 1,' 'JSON.stringify({ version: "1-${matugenScheme}",' \
+      --replace-fail 'd.version === 1' 'd.version === "1-${matugenScheme}"'
 
     substituteInPlace colors/Colors.qml \
       --replace-fail 'Quickshell.shellPath("colors/Colors.json")' \
