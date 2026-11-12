@@ -17,6 +17,7 @@
   libsoup_3,
   webkitgtk_4_1,
   gst_all_1,
+  papirus-icon-theme,
   wrapGAppsHook3,
   ...
 }:
@@ -36,9 +37,15 @@ stdenv.mkDerivation (finalAttrs: {
     hash = "sha256-irOQwyN7fZ+x4KAZ0oHzMBgRwgYaM/IAaBwTFjRUB/I=";
   };
 
-  # Local: thumbnail preview above the seekbar while hovering/scrubbing,
-  # from YouTube's storyboard sprite sheets.
-  patches = [ ./flow-desktop-storyboard-preview.patch ];
+  patches = [
+    # Local: thumbnail preview above the seekbar while hovering/scrubbing,
+    # from YouTube's storyboard sprite sheets.
+    ./flow-desktop-storyboard-preview.patch
+    # Local: play music straight from the <audio> element unless the EQ is on.
+    # WebKitGTK's WebAudio output goes silent on the AirPods (A2DP/AAC sink)
+    # while plain media playback works.
+    ./flow-desktop-webaudio-only-for-eq.patch
+  ];
 
   pnpmDeps = fetchPnpmDeps {
     inherit (finalAttrs) src pname version;
@@ -98,6 +105,14 @@ stdenv.mkDerivation (finalAttrs: {
 
   # Upstream's Rust tests open sockets and write app data; the release build is the check.
   doCheck = false;
+
+  # Local: use Papirus's YouTube icon instead of Flow's own. Copied (not linked)
+  # so the theme stays a build-time-only input.
+  postInstall = ''
+    rm -r $out/share/icons/hicolor
+    install -Dm644 ${papirus-icon-theme}/share/icons/Papirus/64x64/apps/youtube.svg \
+      $out/share/icons/hicolor/scalable/apps/flow.svg
+  '';
 
   # The binary only searches for its BotGuard sidecar next to itself, not in lib/Flow.
   preFixup = ''

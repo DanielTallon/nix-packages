@@ -1,0 +1,27 @@
+--- a/src/lib/audio/musicAudioEngine.ts
++++ b/src/lib/audio/musicAudioEngine.ts
+@@ -89,6 +89,11 @@
+ 
+   private ensureGraph(): void {
+     if (this.graphReady || this.webAudioFailed || !this.active.el) return;
++    // Only route through WebAudio when the EQ needs it. On WebKitGTK the
++    // AudioContext output can go silent on some sinks (e.g. Bluetooth A2DP)
++    // while plain <audio> playback keeps working; volume and loudness
++    // normalization work without the graph via element volume.
++    if (!this.eqEnabled) return;
+     try {
+       const Ctor = getAudioContextCtor();
+       if (!Ctor) {
+@@ -343,6 +348,12 @@
+ 
+   setEqEnabled(enabled: boolean): void {
+     this.eqEnabled = enabled;
++    if (enabled && !this.graphReady) {
++      // Once built, the graph stays until restart: a media element can't be
++      // detached from its MediaElementAudioSourceNode.
++      this.ensureGraph();
++      if (this.ctx && this.ctx.state === "suspended") void this.ctx.resume().catch(() => {});
++    }
+     this.applyEq();
+   }
+ 
