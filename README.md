@@ -320,6 +320,7 @@ white table may not be found; then it says so and uses the whole photo.
 
 ## License
 
-This repo's packaging code (the `.nix` files) is provided as-is. Each
-packaged application retains its own upstream license — see each
-package's `meta.license` and the links above.
+This repo's own code (the `.nix` files and my own projects in it) is
+[MIT](LICENSE) licensed. Each packaged third-party application keeps its
+own upstream license — see each package's `meta.license` and the links
+above.
