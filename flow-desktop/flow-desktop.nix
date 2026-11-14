@@ -45,6 +45,9 @@ stdenv.mkDerivation (finalAttrs: {
     # WebKitGTK's WebAudio output goes silent on the AirPods (A2DP/AAC sink)
     # while plain media playback works.
     ./flow-desktop-webaudio-only-for-eq.patch
+    # Local: reload button next to Back/Forward, plus F5 and Ctrl+R, like a
+    # browser. Full page reload, as upstream's error screen already does.
+    ./flow-desktop-reload-button.patch
   ];
 
   pnpmDeps = fetchPnpmDeps {
@@ -115,8 +118,12 @@ stdenv.mkDerivation (finalAttrs: {
   '';
 
   # The binary only searches for its BotGuard sidecar next to itself, not in lib/Flow.
+  # Local: keep WebKitGTK off NVDEC for H.264. nvh264dec outranks avdec_h264, and
+  # its frames reach the screen with uneven pacing (240p H.264 played visibly
+  # jittery on an RTX 4070 SUPER); software decoding plays smoothly.
   preFixup = ''
     gappsWrapperArgs+=(
+      --set-default GST_PLUGIN_FEATURE_RANK nvh264dec:NONE
       --set-default FLOW_NODE ${lib.getExe nodejs-slim_22}
       --set-default FLOW_INTEGRITY_SCRIPT $out/lib/Flow/sidecar/integrity.cjs
       --prefix PATH : ${lib.makeBinPath [ gst_all_1.gstreamer ]}

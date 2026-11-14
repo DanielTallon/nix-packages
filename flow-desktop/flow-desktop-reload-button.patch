@@ -1,0 +1,39 @@
+--- a/src/components/layout/Topbar.tsx
++++ b/src/components/layout/Topbar.tsx
+@@ -1,6 +1,6 @@
+ import React, { useState, useEffect, useRef } from 'react';
+ import { useLocation, useNavigate } from 'react-router-dom';
+-import { ArrowLeft, ArrowRight, HatGlasses, Loader2, Menu, Search, Settings } from 'lucide-react';
++import { ArrowLeft, ArrowRight, HatGlasses, Loader2, Menu, RotateCw, Search, Settings } from 'lucide-react';
+ import { useUiStore } from '../../store/useUiStore';
+ import { useAppSettingsStore } from '../../store/useAppSettingsStore';
+ import Logo from '../common/Logo';
+@@ -47,6 +47,14 @@
+         searchInputRef.current?.select();
+         setShowSuggestions(true);
+       }
++      // Browser-style reload: F5 or Ctrl/Cmd+R (with or without Shift).
++      if (
++        !event.repeat &&
++        (event.key === 'F5' || ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'r'))
++      ) {
++        event.preventDefault();
++        window.location.reload();
++      }
+     };
+ 
+     window.addEventListener('keydown', handleShortcut);
+@@ -205,6 +213,13 @@
+           >
+             <ArrowRight />
+           </IconButton>
++          <IconButton
++            title="Reload"
++            onClick={() => window.location.reload()}
++            className="text-chrome-zinc-300 hover:text-chrome-zinc-100"
++          >
++            <RotateCw />
++          </IconButton>
+         </div>
+       </div>
+ 
