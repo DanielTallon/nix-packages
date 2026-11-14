@@ -1,0 +1,74 @@
+name: cachix
+
+# Builds every x86_64-linux package and pushes the results to Cachix, so
+# machines download flow-desktop & co. instead of compiling them (a 2-core
+# laptop ran out of memory building flow-desktop).
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # "Run workflow" button
+
+# Let an earlier run finish: the dotfiles may pin that commit.
+concurrency:
+  group: cachix-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CACHIX_NAME: danieltallon
+  # Built (so CI still checks them) but not pushed:
+  #   brave-origin, proton-wineland*: repackaged upstream binaries, nothing to
+  #     compile, large, and updated often. They'd use up the free plan's 5 GB.
+  #   kenku-fm: unfree, so not ours to redistribute.
+  NO_PUSH: brave-origin proton-wineland proton-wineland-x86_64 kenku-fm
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # The free runner has only ~14 GB free. flow-desktop's build needs ~2 GB
+      # of inputs plus a Rust target dir and node_modules, and the proton
+      # tarballs are large. Removing preinstalled toolchains frees ~25 GB.
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/share/boost /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v31
+
+      # Configures the cache as a substituter (so unchanged packages download
+      # instead of rebuilding) and logs in. skipPush: the action would push
+      # every new store path, including the excluded packages' sources, so we
+      # push only what we pick below.
+      - uses: cachix/cachix-action@v16
+        with:
+          name: ${{ env.CACHIX_NAME }}
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          skipPush: true
+
+      - name: Build all packages
+        run: |
+          mapfile -t attrs < <(nix eval --json .#packages.x86_64-linux \
+            --apply 'ps: map (n: ".#" + n) (builtins.attrNames ps)' | jq -r '.[]')
+          printf '%s\n' "${attrs[@]}"
+          nix build --no-link --keep-going -L "${attrs[@]}"
+
+      # Pushes each package's runtime closure. Cachix skips paths that
+      # cache.nixos.org already has, so only our own builds are uploaded.
+      - name: Push to Cachix
+        run: |
+          for a in $(nix eval --json .#packages.x86_64-linux --apply builtins.attrNames | jq -r '.[]'); do
+            case " $NO_PUSH " in *" $a "*) echo "skip $a"; continue ;; esac
+            nix path-info -r ".#$a" | cachix push "$CACHIX_NAME"
+          done
+
+      - name: Disk usage after build
+        if: always()
+        run: df -h /
