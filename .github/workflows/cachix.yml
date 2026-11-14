@@ -29,16 +29,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      # The free runner has only ~14 GB free. flow-desktop's build needs ~2 GB
-      # of inputs plus a Rust target dir and node_modules, and the proton
-      # tarballs are large. Removing preinstalled toolchains frees ~25 GB.
-      - name: Free disk space
-        run: |
-          df -h /
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-            /usr/local/share/boost /opt/hostedtoolcache/CodeQL
-          df -h /
-
+      # No disk cleanup needed: the runner starts with ~88 GB free, and a full
+      # build of every package used ~13 GB (first run, 2026-11-14).
       - uses: actions/checkout@v4
 
       - uses: cachix/install-nix-action@v31
