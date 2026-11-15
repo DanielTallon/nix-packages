@@ -1,0 +1,124 @@
+diff --git a/modules/wallpaper/PickerSettings.qml b/modules/wallpaper/PickerSettings.qml
+index da72999..a520fab 100644
+--- a/modules/wallpaper/PickerSettings.qml
++++ b/modules/wallpaper/PickerSettings.qml
+@@ -447,8 +447,72 @@ Rectangle {
+         }
+ 
+         Note {
+-            text: animateRow.checked ? "The card comes to the middle of the screen and grows into the wallpaper, then the picker closes."
++            text: animateRow.checked ? "The card comes to the middle of the screen and lights up, then the picker closes as the wallpaper changes."
+                 : "The wallpaper changes straight away and the deck stays open, for more browsing."
+         }
++
++        // The whole row flips the switch.
++        ClickableRect {
++            id: previewRow
++
++            readonly property bool checked: SettingsConfig.wallpaperPreviewOnPeek
++
++            width: parent.width
++            height: 40 * card.u
++            radius: DesktopTheme.rad(12) * card.u
++            color: previewRow.hovered ? Colors.withAlpha(card.ink, 0.1) : Colors.withAlpha(card.ink, 0.06)
++            border.width: 1
++            border.color: Colors.withAlpha(card.ink, 0.12)
++            cursorShape: Qt.PointingHandCursor
++            onClicked: SettingsConfig.wallpaperPreviewOnPeek = !SettingsConfig.wallpaperPreviewOnPeek
++
++            StyledText {
++                anchors.left: parent.left
++                anchors.leftMargin: 14 * card.u
++                anchors.right: previewTrack.left
++                anchors.rightMargin: 12 * card.u
++                anchors.verticalCenter: parent.verticalCenter
++                text: "Preview full screen only while peeking"
++                elide: Text.ElideRight
++                font.pixelSize: 13 * card.u
++                color: card.ink
++            }
++
++            // The switch, as round as the theme's controls.
++            Rectangle {
++                id: previewTrack
++                anchors.right: parent.right
++                anchors.rightMargin: 8 * card.u
++                anchors.verticalCenter: parent.verticalCenter
++                width: 42 * card.u
++                height: 24 * card.u
++                radius: Math.min(height / 2, previewRow.radius)
++                color: previewRow.checked ? card.accent : Colors.withAlpha(card.ink, 0.16)
++
++                Behavior on color {
++                    ColorAnimation { duration: 160 }
++                }
++
++                Rectangle {
++                    readonly property real inset: 3 * card.u
++
++                    x: previewRow.checked ? parent.width - width - inset : inset
++                    y: inset
++                    width: parent.height - inset * 2
++                    height: width
++                    radius: Math.max(0, previewTrack.radius - inset)
++                    color: previewRow.checked ? card.accentInk : card.ink
++
++                    Behavior on x {
++                        NumberAnimation { duration: 160; easing.type: Easing.OutCubic }
++                    }
++                }
++            }
++        }
++
++        Note {
++            text: previewRow.checked ? "Your desktop stays behind the deck; hold or tap Space to see the card in front full screen."
++                : "The card in front is shown full screen behind the deck as you browse."
++        }
+     }
+ }
+diff --git a/modules/wallpaper/Wallpaper.qml b/modules/wallpaper/Wallpaper.qml
+index 6c76ac4..38b80bf 100644
+--- a/modules/wallpaper/Wallpaper.qml
++++ b/modules/wallpaper/Wallpaper.qml
+@@ -31,6 +31,10 @@ import qs.settings
+ // drag to go there. The gear opens the settings: the wallpaper folder
+ // (~/Pictures/wallpapers by default) and a Wallhaven API key.
+ //
++// With wallpaperPreviewOnPeek (the settings' switch, on by default) that
++// full-screen preview shows only while peeking: the desktop stays behind
++// the deck, so a chosen wallpaper's transition is the first look at it.
++//
+ // The live preview (the play button, or V; kept in settings.json) plays
+ // videos and animated GIF/WebP wallpapers in the preview and in the card
+ // in front, instead of a still of them.
+@@ -1011,7 +1015,7 @@ Item {
+     WallpaperBackdrop {
+         id: backdrop
+         anchors.fill: parent
+-        opacity: window.shown * (1 - window.hush)
++        opacity: window.shown * (1 - window.hush) * (SettingsConfig.wallpaperPreviewOnPeek ? window.peek : 1)
+     }
+ 
+     // Shade at the head and the foot, so the header and the deck read on
+diff --git a/settings/SettingsConfig.qml b/settings/SettingsConfig.qml
+index 0612fa8..c40e5f1 100644
+--- a/settings/SettingsConfig.qml
++++ b/settings/SettingsConfig.qml
+@@ -25,6 +25,7 @@ Singleton {
+     property alias wallpaperCommand: settingsAdapter.wallpaperCommand
+     property alias wallpaperLivePreview: settingsAdapter.wallpaperLivePreview
+     property alias wallpaperAnimateChoice: settingsAdapter.wallpaperAnimateChoice
++    property alias wallpaperPreviewOnPeek: settingsAdapter.wallpaperPreviewOnPeek
+     property alias wallpaperScheme: settingsAdapter.wallpaperScheme
+     property alias wallhavenApiKey: settingsAdapter.wallhavenApiKey
+     property alias wallhavenCategories: settingsAdapter.wallhavenCategories
+@@ -68,6 +69,9 @@ Singleton {
+             // The card set grows into the wallpaper (false: set straight
+             // away, the deck stays open)
+             property bool wallpaperAnimateChoice: true
++            // The card in front is shown full screen only while peeking
++            // (false: always, behind the deck)
++            property bool wallpaperPreviewOnPeek: true
+             // Noctalia's wallpaper generator scheme ("" = leave Noctalia's
+             // own alone, the "Current" choice in the picker's header).
+             property string wallpaperScheme: ""

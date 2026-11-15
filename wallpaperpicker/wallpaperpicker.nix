@@ -43,7 +43,16 @@ stdenvNoCC.mkDerivation (finalAttrs: {
   # which changed underneath it with no transition (only the other screens
   # got one). Now the preview fades to the desktop behind the card and the
   # wallpaper is set as the picker goes, so the transition plays everywhere.
-  patches = [ ./trash-wallpaper.patch ./wipe-on-picker-screen.patch ];
+  #
+  # The full-screen preview of the card in front shows only while peeking
+  # (Space), so the desktop stays behind the deck and the transition is the
+  # first full look at a chosen wallpaper. A switch in the picker's settings
+  # (wallpaperPreviewOnPeek) turns the always-on preview back on.
+  patches = [
+    ./trash-wallpaper.patch
+    ./wipe-on-picker-screen.patch
+    ./preview-on-peek.patch
+  ];
 
   nativeBuildInputs = [ makeWrapper ];
 
