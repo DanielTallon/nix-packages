@@ -1,4 +1,4 @@
-{ lib, stdenvNoCC, fetchFromGitLab, makeWrapper, writeText, quickshell, qt6, matugen, ffmpeg, curl, python3, coreutils, material-symbols, ...}:
+{ lib, stdenvNoCC, fetchFromGitLab, makeWrapper, writeText, quickshell, qt6, matugen, ffmpeg, curl, python3, coreutils, glib, material-symbols, ...}:
 
 # Upstream is qs-kwepaperpicker, a Quickshell config folder meant to live
 # (writable) in ~/.config/kwepaperpicker. Here it is renamed wallpaperpicker,
@@ -34,6 +34,16 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     rev = "b95c0aa44ae3d83f94bd282fb3a3bee328cc932d";
     hash = "sha256-uqlMJOZTsKTXxbJQZRZEGWbk8vawHnkMucDl9qiicNg=";
   };
+
+  # Delete (twice) or the trash button by the heart moves the local
+  # wallpaper in front to the trash (gio trash), and unfavorites it. The one
+  # on the desktop can't be: set another first.
+  #
+  # A chosen card used to grow into the wallpaper on the picker's screen,
+  # which changed underneath it with no transition (only the other screens
+  # got one). Now the preview fades to the desktop behind the card and the
+  # wallpaper is set as the picker goes, so the transition plays everywhere.
+  patches = [ ./trash-wallpaper.patch ./wipe-on-picker-screen.patch ];
 
   nativeBuildInputs = [ makeWrapper ];
 
@@ -138,7 +148,7 @@ ensure() {
   postFixup = ''
     wrapProgram $out/bin/wallpaperpicker \
       --set FONTCONFIG_FILE ${fontsConf} \
-      --prefix PATH : ${lib.makeBinPath [ quickshell matugen ffmpeg curl python3 coreutils ]} \
+      --prefix PATH : ${lib.makeBinPath [ quickshell matugen ffmpeg curl python3 coreutils glib ]} \
       --prefix QML_IMPORT_PATH : ${qt6.qtmultimedia}/${qt6.qtbase.qtQmlPrefix} \
       --prefix QT_PLUGIN_PATH : ${qt6.qtmultimedia}/${qt6.qtbase.qtPluginPrefix} \
       --prefix QT_PLUGIN_PATH : ${qt6.qtimageformats}/${qt6.qtbase.qtPluginPrefix}

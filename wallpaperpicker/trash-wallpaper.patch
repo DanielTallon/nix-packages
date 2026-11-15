@@ -1,0 +1,218 @@
+diff --git a/modules/wallpaper/Wallpaper.qml b/modules/wallpaper/Wallpaper.qml
+index 88c71fc..6b62d3c 100644
+--- a/modules/wallpaper/Wallpaper.qml
++++ b/modules/wallpaper/Wallpaper.qml
+@@ -45,7 +45,7 @@ import qs.settings
+ // Keys: ←→ browse, Home/End, PgUp/PgDn, R a random card, Enter set, F
+ // favourite, S sort, Space peek (hold, or tap to keep: the deck steps aside
+ // for a clear look), V live preview, Tab next source, / search (Wallhaven),
+-// Esc close.
++// Delete (twice) moves a local wallpaper to the trash, Esc close.
+ // Mouse: wheel or drag anywhere to browse, click a card to bring it to the
+ // front, click the front card (or double-click any) to set it, click the
+ // picture itself to peek.
+@@ -555,6 +555,36 @@ Item {
+             WallpaperFavorites.toggle(name);
+     }
+ 
++    // ── Deleting ─────────────────────────────────────────────────────────
++    // The local card waiting for a second Delete (or trash click) to be
++    // moved to the trash ("" when none), and why the last try didn't work.
++    property string deleteArmed: ""
++    property string deleteNote: ""
++
++    // First press arms it, the second (same card) sends it to the trash.
++    // The wallpaper on the desktop stays: its file is still in use.
++    function requestDelete() {
++        const e = currentEntry;
++        if (!e || e.item || online || choosing || closing)
++            return;
++        if (isActive(e)) {
++            deleteArmed = "";
++            deleteNote = "It's on your desktop: set another wallpaper first";
++            deleteNoteTimer.restart();
++            return;
++        }
++        if (deleteArmed !== e.fileName) {
++            deleteArmed = e.fileName;
++            deleteNote = "";
++            return;
++        }
++        deleteArmed = "";
++        trashRun.name = e.fileName;
++        // Prints "ok", or gio's last line of errors.
++        trashRun.exec(["sh", "-c", 'out=$(gio trash -- "$1" 2>&1) && echo ok || printf "%s" "$out" | tail -n 1',
++            "sh", WallpaperEngine.dir + "/" + e.fileName]);
++    }
++
+     function togglePeek() {
+         peekKept = !peekKept;
+     }
+@@ -620,6 +650,8 @@ Item {
+         if (!visible)
+             return;
+         resetChoice();
++        deleteArmed = "";
++        deleteNote = "";
+         peekKept = false;
+         peekHeld = false;
+         settingsOpen = false;
+@@ -659,6 +691,8 @@ Item {
+             WallpaperEngine.pickerCovers = "";
+     }
+     onCurrentEntryChanged: {
++        if (!currentEntry || currentEntry.fileName !== deleteArmed)
++            deleteArmed = "";
+         // A chosen card keeps the preview as it is.
+         if (choosing)
+             return;
+@@ -1042,7 +1076,9 @@ Item {
+                 return;
+             }
+             if (k === Qt.Key_Escape) {
+-                if (window.schemeOpen)
++                if (window.deleteArmed !== "")
++                    window.deleteArmed = "";
++                else if (window.schemeOpen)
+                     window.schemeOpen = false;
+                 else if (window.settingsOpen)
+                     window.setSettingsOpen(false);
+@@ -1069,6 +1105,9 @@ Item {
+                     window.peekHeld = true;
+                     window.peekPressedAt = Date.now();
+                 }
++            } else if (k === Qt.Key_Delete && !window.online) {
++                if (!event.isAutoRepeat)
++                    window.requestDelete();
+             } else if (k === Qt.Key_F && !window.online) {
+                 window.toggleFavorite(window.currentName);
+             } else if (k === Qt.Key_S && !window.online) {
+@@ -1252,6 +1291,48 @@ Item {
+             }
+         }
+ 
++        ClickableRect {
++            id: trashButton
++
++            readonly property bool armed: !!actions.entry && window.deleteArmed === actions.entry.fileName
++
++            visible: !window.online
++            width: armed ? trashRow.implicitWidth + 28 * window.u : 40 * window.u
++            height: 40 * window.u
++            radius: height / 2
++            color: armed ? (trashButton.hovered ? Qt.lighter("#e5484d", 1.1) : "#e5484d")
++                : trashButton.hovered ? Colors.withAlpha(tint.surface, 0.95) : Colors.withAlpha(tint.surface, 0.78)
++            border.width: armed ? 0 : 1
++            border.color: Colors.withAlpha(tint.ink, 0.14)
++            opacity: actions.active ? 0.45 : 1
++            cursorShape: Qt.PointingHandCursor
++            onClicked: window.requestDelete()
++
++            Row {
++                id: trashRow
++                anchors.centerIn: parent
++                spacing: 6 * window.u
++
++                Glyph {
++                    anchors.verticalCenter: parent.verticalCenter
++                    anchors.verticalCenterOffset: 1
++                    text: trashButton.armed ? "delete_forever" : "delete"
++                    filled: trashButton.armed
++                    font.pixelSize: 20 * window.u
++                    color: trashButton.armed ? "white" : tint.ink
++                }
++
++                StyledText {
++                    anchors.verticalCenter: parent.verticalCenter
++                    visible: trashButton.armed
++                    text: "Move to trash?"
++                    font.pixelSize: 13 * window.u
++                    font.weight: Font.DemiBold
++                    color: "white"
++                }
++            }
++        }
++
+         ClickableRect {
+             id: setButton
+ 
+@@ -1775,7 +1856,7 @@ Item {
+             id: hints
+             anchors.centerIn: parent
+             text: "←→ or wheel browse  ·  Enter set  ·  F favourite  ·  S sort  ·  R random  ·  Space peek  ·  "
+-                + (window.hasMotion ? "V live preview  ·  " : "") + "Tab source  ·  Esc close"
++                + (window.hasMotion ? "V live preview  ·  " : "") + "Del trash  ·  Tab source  ·  Esc close"
+             font.pixelSize: 12 * window.u
+             color: Colors.withAlpha(tint.ink, 0.78)
+         }
+@@ -2016,6 +2097,70 @@ Item {
+         }
+     }
+ 
++    // Deleting: what a second press does, or why it can't.
++    Glass {
++        anchors.horizontalCenter: parent.horizontalCenter
++        anchors.bottom: parent.bottom
++        anchors.bottomMargin: 30 * window.u
++        visible: opacity > 0.01
++        opacity: (window.deleteArmed !== "" || window.deleteNote !== "") && !window.choosing ? window.shown : 0
++        width: deleteRow.implicitWidth + 28 * window.u
++        height: 36 * window.u
++
++        Behavior on opacity {
++            NumberAnimation { duration: 180 }
++        }
++
++        Row {
++            id: deleteRow
++            anchors.centerIn: parent
++            spacing: 10 * window.u
++
++            Glyph {
++                anchors.verticalCenter: parent.verticalCenter
++                text: window.deleteArmed !== "" ? "delete_forever" : "info"
++                font.pixelSize: 18 * window.u
++                color: tint.ink
++            }
++
++            StyledText {
++                anchors.verticalCenter: parent.verticalCenter
++                text: window.deleteArmed !== ""
++                    ? "Move " + window.deleteArmed + " to the trash?  Del again to confirm  ·  Esc cancel"
++                    : window.deleteNote
++                font.pixelSize: 13 * window.u
++                color: tint.ink
++            }
++        }
++    }
++
++    Timer {
++        id: deleteNoteTimer
++        interval: 3500
++        onTriggered: window.deleteNote = ""
++    }
++
++    // Moves a wallpaper to the trash; the folder model drops its card.
++    Process {
++        id: trashRun
++
++        property string name: ""
++
++        stdout: StdioCollector {
++            onStreamFinished: {
++                const out = text.trim();
++                if (out === "ok") {
++                    if (WallpaperFavorites.has(trashRun.name))
++                        WallpaperFavorites.toggle(trashRun.name);
++                    return;
++                }
++                console.warn("wallpaper trash:", out);
++                window.deleteNote = "Couldn't move " + trashRun.name + " to the trash" + (out ? ": " + out : "");
++                deleteNoteTimer.restart();
++            }
++        }
++    }
++
+     // While peeking: how to get back.
+     Glass {
+         anchors.horizontalCenter: parent.horizontalCenter

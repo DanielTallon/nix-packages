@@ -1,0 +1,114 @@
+diff --git a/modules/wallpaper/Wallpaper.qml b/modules/wallpaper/Wallpaper.qml
+index 6b62d3c..6c76ac4 100644
+--- a/modules/wallpaper/Wallpaper.qml
++++ b/modules/wallpaper/Wallpaper.qml
+@@ -36,8 +36,9 @@ import qs.settings
+ // in front, instead of a still of them.
+ //
+ // Choosing a card: it leaves the hand for the middle of the screen while
+-// the rest of the hand is put away, lights up as it's set, then fades and
+-// the picker goes, over the wallpaper itself. A Wallhaven result waits in
++// the rest of the hand is put away and the preview fades to the desktop
++// behind it, lights up, then fades as the picker goes and the wallpaper
++// changes with its transition on every screen, this one too. A Wallhaven result waits in
+ // the middle while it downloads (Esc sends it back to the deck). With that turned off in the
+ // settings (wallpaperAnimateChoice), a card is set straight away and the
+ // deck stays open for more browsing.
+@@ -181,6 +182,9 @@ Item {
+     property bool settling: false
+     // Its wallpaper is set (the card wears the "current" tag from then).
+     property bool chosenSet: false
++    // A chosen local wallpaper, set only as the picker goes so its
++    // transition plays in view ("" when none).
++    property string pendingSet: ""
+     // It was playing in the preview when it was chosen, so its picture is
+     // that video.
+     property bool chosenLive: false
+@@ -395,13 +399,15 @@ Item {
+         // Another one is downloading.
+         if (e.item && !isSaved(e) && downloading !== "" && downloading !== e.fileName)
+             return;
+-        // Chosen first: the wallpaper under it then changes without its
+-        // transition (see WallpaperEngine.pickerCovers). A video waits till
+-        // the card's in the middle (arrived()).
++        // A chosen local card is set as the picker goes (close()), so its
++        // transition plays in view; a Wallhaven one as it's downloaded,
++        // behind the card in the middle.
+         const animate = SettingsConfig.wallpaperAnimateChoice;
+         if (animate)
+             choose(e);
+-        if (!e.item) {
++        if (animate && !e.item) {
++            pendingSet = e.fileUrl;
++        } else if (!e.item) {
+             if (!animate || !e.video)
+                 WallpaperEngine.set(e.fileUrl);
+         } else if (isSaved(e)) {
+@@ -488,7 +494,9 @@ Item {
+     // In the middle: on to the wallpaper, or wait for the download, or
+     // set a video and wait for it to be drawn.
+     function arrived() {
+-        if (!chosen.item && chosen.video && !isSet(chosen)) {
++        if (pendingSet !== "") {
++            bloomAnim.restart();
++        } else if (!chosen.item && chosen.video && !isSet(chosen)) {
+             settling = true;
+             settleTimer.start();
+             WallpaperEngine.set(chosen.fileUrl);
+@@ -513,7 +521,7 @@ Item {
+     // itself is drawn under it (another program's, it can't tell: at once).
+     function bloomed() {
+         spot = 0;
+-        if (WallpaperEngine.external || WallpaperEngine.drawn === WallpaperEngine.current)
++        if (pendingSet !== "" || WallpaperEngine.external || WallpaperEngine.drawn === WallpaperEngine.current)
+             close();
+         else
+             revealTimer.start();
+@@ -546,6 +554,7 @@ Item {
+         settleTimer.stop();
+         chosenSet = false;
+         chosenLive = false;
++        pendingSet = "";
+         hush = 0;
+         spot = 0;
+     }
+@@ -627,6 +636,11 @@ Item {
+     }
+ 
+     function close() {
++        // A chosen wallpaper waiting for this (Esc may skip ahead to it).
++        if (pendingSet !== "") {
++            WallpaperEngine.set(pendingSet);
++            pendingSet = "";
++        }
+         schemeOpen = false;
+         openAnim.stop();
+         closeAnim.restart();
+@@ -684,12 +698,6 @@ Item {
+         backdrop.motion = live ? motionOf(currentEntry) : "";
+         backdrop.motionPaused = false;
+     }
+-    onChoosingChanged: {
+-        if (choosing)
+-            WallpaperEngine.pickerCovers = Screen.name;
+-        else if (WallpaperEngine.pickerCovers === Screen.name)
+-            WallpaperEngine.pickerCovers = "";
+-    }
+     onCurrentEntryChanged: {
+         if (!currentEntry || currentEntry.fileName !== deleteArmed)
+             deleteArmed = "";
+@@ -997,10 +1005,13 @@ Item {
+         opacity: 0.55 * window.shown * (1 - window.hush)
+     }
+ 
++    // It steps back with the picker behind a chosen card, so the desktop
++    // shows there and the wallpaper's transition plays in view. (The card
++    // still draws its picture from it.)
+     WallpaperBackdrop {
+         id: backdrop
+         anchors.fill: parent
+-        opacity: window.shown
++        opacity: window.shown * (1 - window.hush)
+     }
+ 
+     // Shade at the head and the foot, so the header and the deck read on
