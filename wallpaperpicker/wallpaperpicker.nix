@@ -48,10 +48,16 @@ stdenvNoCC.mkDerivation (finalAttrs: {
   # (Space), so the desktop stays behind the deck and the transition is the
   # first full look at a chosen wallpaper. A switch in the picker's settings
   # (wallpaperPreviewOnPeek) turns the always-on preview back on.
+  #
+  # Upstream ties its 16 wallpaper transitions to its rice's desktop themes,
+  # which this package has none of, so only the circle ever played. A
+  # TRANSITION chooser in the picker's settings (wallpaperTransition) picks
+  # any of them, or a random one each time.
   patches = [
     ./trash-wallpaper.patch
     ./wipe-on-picker-screen.patch
     ./preview-on-peek.patch
+    ./choose-transition.patch
   ];
 
   nativeBuildInputs = [ makeWrapper ];
