@@ -145,14 +145,18 @@ programs.wallpaperpicker = {
   autostart = true;            # start in the background on login (default)
   hotkey = "Meta+Space";       # Plasma shortcut for `wallpaperpicker toggle`
   matugen.enable = true;       # the picker's own UI takes the wallpaper's colors
-  matugen.plasmaColorScheme = true;  # and so does Plasma: a dark scheme from each wallpaper
+  plasmaColors = "matugen";    # and so does Plasma: a dark scheme from each wallpaper
   nixGL = true;                # other distros only, see below
 };
 ```
 
-- `matugen.enable` writes `~/.config/matugen/config.toml`, replacing any matugen config you have.
-- `matugen.plasmaColorScheme` replaces your Plasma color scheme with one made from each wallpaper, and turns off Plasma's own accent color from wallpaper. To go back, turn it off and pick a scheme in System Settings → Colors & Themes.
-- `hotkey` and `matugen.plasmaColorScheme` need [plasma-manager](https://github.com/nix-community/plasma-manager)'s Home Manager module imported as well. Everything else works on any desktop the picker runs on.
+- `matugen.enable` writes `~/.config/matugen/config.toml`, replacing any matugen config you have. Off, the picker goes back to its built-in colors.
+- `plasmaColors` is how Plasma follows the wallpaper:
+  - `"matugen"` replaces your color scheme with a dark one made from each wallpaper (needs `matugen.enable`).
+  - `"accent"` keeps your scheme and turns on Plasma's own accent color from wallpaper, so only highlights, selection and focus follow it. Coming from `"matugen"`, it puts back plasma-manager's `workspace.colorScheme` at the next login, if you set one.
+  - `null` (the default) leaves Plasma's colors alone. To leave `"matugen"` this way, pick a scheme yourself in System Settings → Colors & Themes.
+- `hotkey` and `plasmaColors` need [plasma-manager](https://github.com/nix-community/plasma-manager)'s Home Manager module imported as well. Everything else works on any desktop the picker runs on. On others, bind `wallpaperpicker toggle` to a key in the desktop's own config (in niri: `Mod+Space { spawn "wallpaperpicker" "toggle"; }`).
+- The picker sets the wallpaper on Plasma and draws it itself elsewhere, so one config works for a Plasma user and a niri user alike, or for both sessions on one machine.
 
 #### Home Manager on other distros
 

@@ -20,9 +20,9 @@ let
   '';
 
   # matugen's scheme type: how bold the colors are. Every option is described
-  # at the top of the dotfiles' modules/desktop/wallpaper-colors.nix, which
-  # has its own matugenScheme for the login re-apply: keep the two the same.
-  # (home-module.nix reads this one through passthru, so it always matches.)
+  # at the top of the dotfiles' modules/desktop/wallpaper-picker.nix.
+  # home-module.nix reads this through passthru for its login re-apply, so
+  # this is the only place to change it.
   matugenScheme = "scheme-vibrant";
 in
 stdenvNoCC.mkDerivation (finalAttrs: {

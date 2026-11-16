@@ -1,12 +1,12 @@
 # Home Manager module for wallpaperpicker: the package, a login autostart,
-# a Plasma shortcut, and matugen colors from the wallpaper (the picker's own
-# UI, and optionally a whole Plasma color scheme). The same setup as my
-# dotfiles (modules/desktop/plasma.nix and wallpaper-colors.nix), for any
-# distro with Home Manager. Exposed as homeModules.wallpaperpicker; see the
-# README and ./home-template for a ready-made flake.
+# a Plasma shortcut, and colors from the wallpaper (matugen for the picker's
+# own UI; for Plasma, either matugen's whole color scheme or Plasma's own
+# accent color). My dotfiles use it too (modules/desktop/wallpaper-picker.nix).
+# Exposed as homeModules.wallpaperpicker; see the README and ./home-template
+# for a ready-made flake for other distros.
 #
-# The shortcut and the Plasma color scheme need plasma-manager's module
-# imported too. Everything else works on any desktop the picker runs on.
+# The shortcut and plasmaColors need plasma-manager's module imported too.
+# Everything else works on any desktop the picker runs on.
 { self }:
 { config, lib, pkgs, options, ... }:
 let
@@ -19,7 +19,7 @@ let
   matugenScheme = picker.matugenScheme;
 
   hasPlasmaManager = options ? programs.plasma.hotkeys;
-  usesPlasma = cfg.hotkey != null || cfg.matugen.plasmaColorScheme;
+  usesPlasma = cfg.hotkey != null || cfg.plasmaColors != null;
 
   # What's installed and run: the package, through nixGL if asked.
   installed = if cfg.nixGL then config.lib.nixGL.wrap cfg.package else cfg.package;
@@ -171,20 +171,27 @@ in
           Color the picker's own UI from the wallpaper. The picker runs
           matugen on every wallpaper it sets; this writes the matugen config
           (~/.config/matugen/config.toml) that tells it where the picker's
-          colors go. Replaces any matugen config you already have.
+          colors go. Replaces any matugen config you already have. Off, the
+          picker goes back to its built-in colors.
         '';
       };
+    };
 
-      plasmaColorScheme = lib.mkOption {
-        type = lib.types.bool;
-        default = false;
-        description = ''
-          Also make a whole dark Plasma color scheme ("Matugen") from each
-          wallpaper and apply it: windows, buttons, headers, selection and
-          title bars. Turns off Plasma's own accent color from wallpaper.
-          Needs plasma-manager, and matugen.enable.
-        '';
-      };
+    plasmaColors = lib.mkOption {
+      type = lib.types.nullOr (lib.types.enum [ "matugen" "accent" ]);
+      default = null;
+      description = ''
+        How Plasma follows the wallpaper. Needs plasma-manager.
+
+        - `"matugen"`: a whole dark color scheme ("Matugen") made from each
+          wallpaper: windows, buttons, headers, selection and title bars.
+          Needs matugen.enable.
+        - `"accent"`: Plasma's own accent color from wallpaper. Highlights,
+          selection and focus follow the wallpaper; the rest stays your
+          color scheme. Switching here from "matugen" re-applies
+          `programs.plasma.workspace.colorScheme` at the next login, if set.
+        - `null`: leaves Plasma's colors alone.
+      '';
     };
   };
 
@@ -193,11 +200,11 @@ in
       assertions = [
         {
           assertion = usesPlasma -> hasPlasmaManager;
-          message = "programs.wallpaperpicker.hotkey and .matugen.plasmaColorScheme need plasma-manager's Home Manager module imported.";
+          message = "programs.wallpaperpicker.hotkey and .plasmaColors need plasma-manager's Home Manager module imported.";
         }
         {
-          assertion = cfg.matugen.plasmaColorScheme -> cfg.matugen.enable;
-          message = "programs.wallpaperpicker.matugen.plasmaColorScheme needs programs.wallpaperpicker.matugen.enable.";
+          assertion = cfg.plasmaColors == "matugen" -> cfg.matugen.enable;
+          message = ''programs.wallpaperpicker.plasmaColors = "matugen" needs programs.wallpaperpicker.matugen.enable.'';
         }
       ];
 
@@ -220,7 +227,7 @@ in
           [templates.wallpaperpicker]
           input_path = "${picker}/share/wallpaperpicker/extras/matugen/quickshell.json.hbs"
           output_path = "${config.xdg.configHome}/wallpaperpicker/colors/Colors.json"
-        '' + lib.optionalString cfg.matugen.plasmaColorScheme ''
+        '' + lib.optionalString (cfg.plasmaColors == "matugen") ''
 
           [templates.plasma]
           input_path = "${kdeTemplate}"
@@ -228,6 +235,12 @@ in
           post_hook = "${applyMatugenScheme}"
         '';
       };
+
+      # Colors matugen wrote while matugen.enable was on would otherwise stay.
+      home.activation.wallpaperpickerColors = lib.mkIf (!cfg.matugen.enable)
+        (lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+          run rm -f "${config.xdg.configHome}/wallpaperpicker/colors/Colors.json"
+        '');
     }
 
     # Only defined with plasma-manager imported, so the module also loads
@@ -243,7 +256,23 @@ in
         };
       })
 
-      (lib.mkIf cfg.matugen.plasmaColorScheme {
+      (lib.mkIf (cfg.plasmaColors == "accent") {
+        programs.plasma.configFile."kdeglobals".General.accentColorFromWallpaper = true;
+
+        # Back from the Matugen scheme, if that was in use. Runs once at the
+        # first login after a switch that changes it.
+        programs.plasma.startup.startupScript."wallpaperpicker-colors" =
+          lib.mkIf (config.programs.plasma.workspace.colorScheme != null) {
+            priority = 2;
+            text = ''
+              if [[ $(${kreadconfig} --file kdeglobals --group General --key ColorScheme) == Matugen* ]]; then
+                ${applyColorScheme} ${config.programs.plasma.workspace.colorScheme}
+              fi
+            '';
+          };
+      })
+
+      (lib.mkIf (cfg.plasmaColors == "matugen") {
         programs.plasma.configFile."kdeglobals".General.accentColorFromWallpaper = false;
 
         # Runs once at the first login after a switch that changes it, after

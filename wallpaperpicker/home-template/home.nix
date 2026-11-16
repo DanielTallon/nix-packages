@@ -30,9 +30,10 @@
     hotkey = "Meta+Space";  # opens and closes it (Plasma)
 
     # Every wallpaper it sets recolors the picker itself, and Plasma too: a
-    # dark color scheme made from the wallpaper. Replaces your Plasma color
-    # scheme; turn plasmaColorScheme off to keep yours.
+    # dark color scheme made from the wallpaper, replacing your Plasma color
+    # scheme. "accent" keeps your scheme and only takes the accent color
+    # (highlights, selection) from the wallpaper; null leaves Plasma alone.
     matugen.enable = true;
-    matugen.plasmaColorScheme = true;
+    plasmaColors = "matugen";
   };
 }
