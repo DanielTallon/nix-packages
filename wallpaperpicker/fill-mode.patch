@@ -1,0 +1,229 @@
+diff --git a/modules/wallpaper/PickerSettings.qml b/modules/wallpaper/PickerSettings.qml
+index 01305a8..fa3e842 100644
+--- a/modules/wallpaper/PickerSettings.qml
++++ b/modules/wallpaper/PickerSettings.qml
+@@ -54,6 +54,21 @@ Rectangle {
+         SettingsConfig.wallpaperTransition = transitionOptions[(transitionIndex + d + n) % n].key;
+     }
+ 
++    // How a wallpaper fills the screen (WallpaperEngine.fillModes).
++    readonly property var fillOptions: [
++        { key: "crop", label: "Crop", note: "Fills the screen; what doesn't fit is cut off." },
++        { key: "fit", label: "Fit", note: "The whole picture, with bars where it doesn't fill the screen." },
++        { key: "stretch", label: "Stretch", note: "Fills the screen, stretched or squashed to its shape." },
++        { key: "center", label: "Center", note: "At its own size in the middle, cut off or bordered. Videos are cropped." },
++        { key: "tile", label: "Tile", note: "At its own size, repeated across the screen. Videos are cropped." }
++    ]
++    readonly property int fillIndex: Math.max(0, fillOptions.findIndex(f => f.key === SettingsConfig.wallpaperFillMode))
++
++    function stepFill(d) {
++        const n = fillOptions.length;
++        SettingsConfig.wallpaperFillMode = fillOptions[(fillIndex + d + n) % n].key;
++    }
++
+     signal closeRequested
+ 
+     // "", "checking", "missing", "relative", "failed" or "saved"
+@@ -616,5 +631,58 @@ Rectangle {
+             text: WallpaperEngine.external ? "Another program draws the wallpaper here (the wallpaper command), so these don't play."
+                 : card.transitionOptions[card.transitionIndex].note
+         }
++
++        Item {
++            width: 1
++            height: 8 * card.u
++        }
++
++        Label {
++            text: "FILL MODE"
++        }
++
++        // ‹ name › : the arrows step through the fill modes.
++        Item {
++            width: parent.width
++            height: 40 * card.u
++
++            Arrow {
++                id: fillPrev
++                anchors.left: parent.left
++                icon: "chevron_left"
++                onClicked: card.stepFill(-1)
++            }
++
++            Rectangle {
++                anchors.left: fillPrev.right
++                anchors.right: fillNext.left
++                anchors.margins: 8 * card.u
++                height: parent.height
++                radius: DesktopTheme.rad(12) * card.u
++                color: Colors.withAlpha(card.ink, 0.06)
++                border.width: 1
++                border.color: Colors.withAlpha(card.ink, 0.12)
++
++                StyledText {
++                    anchors.centerIn: parent
++                    text: card.fillOptions[card.fillIndex].label
++                    font.pixelSize: 13 * card.u
++                    font.weight: Font.DemiBold
++                    color: card.ink
++                }
++            }
++
++            Arrow {
++                id: fillNext
++                anchors.right: parent.right
++                icon: "chevron_right"
++                onClicked: card.stepFill(1)
++            }
++        }
++
++        Note {
++            text: WallpaperEngine.external ? "Another program draws the wallpaper here (the wallpaper command), so it sets how the wallpaper fills the screen."
++                : card.fillOptions[card.fillIndex].note
++        }
+     }
+ }
+diff --git a/modules/wallpaper/WallpaperBackdrop.qml b/modules/wallpaper/WallpaperBackdrop.qml
+index dd6e192..ccb992f 100644
+--- a/modules/wallpaper/WallpaperBackdrop.qml
++++ b/modules/wallpaper/WallpaperBackdrop.qml
+@@ -1,10 +1,13 @@
+ pragma ComponentBehavior: Bound
+ import QtQuick
+ import QtMultimedia
++import qs.colors
+ import qs.services
+ 
+ // The wallpaper picker's full-screen preview: the card in front, shown at
+-// the size it would have on the desktop.
++// the size it would have on the desktop (the picker's fill mode, on the
++// desktop's background color where it doesn't fill the screen). The live
++// preview over it is always cropped, since a card's picture is cut from it.
+ //
+ // Two images take turns: the one on screen (`front`) and the one loading
+ // or fading in over it (`back`). Only the latest request (`wanted`) is
+@@ -112,11 +115,20 @@ Item {
+ 
+     clip: true
+ 
++    // Behind a picture that doesn't fill the screen, as on the desktop.
++    Rectangle {
++        anchors.fill: parent
++        z: -1
++        visible: WallpaperEngine.fill !== "crop"
++        opacity: Math.max(imgA.opacity, imgB.opacity)
++        color: Colors.background
++    }
++
+     component Layer: Image {
+         id: layer
+         anchors.fill: parent
+-        fillMode: Image.PreserveAspectCrop
+-        sourceSize: Qt.size(Math.max(1, backdrop.width), Math.max(1, backdrop.height))
++        fillMode: WallpaperEngine.imageFill
++        sourceSize: WallpaperEngine.fullSize ? undefined : Qt.size(Math.max(1, backdrop.width), Math.max(1, backdrop.height))
+         asynchronous: true
+         cache: false
+         smooth: true
+diff --git a/modules/wallpaper/WallpaperLayer.qml b/modules/wallpaper/WallpaperLayer.qml
+index ac74eae..6f19f7f 100644
+--- a/modules/wallpaper/WallpaperLayer.qml
++++ b/modules/wallpaper/WallpaperLayer.qml
+@@ -133,7 +133,9 @@ Scope {
+                 onTriggered: win.unloadRetired()
+             }
+ 
+-            // One slot: whatever `path` is, cropped to fill the screen.
++            // One slot: whatever `path` is, filling the screen as the
++            // picker's settings say, on the background color where it
++            // doesn't (so the slot under it never shows through).
+             component Wall: Item {
+                 id: wall
+ 
+@@ -160,6 +162,12 @@ Scope {
+                         win.waiting = false;
+                 }
+ 
++                Rectangle {
++                    anchors.fill: parent
++                    visible: wall.path !== "" && Services.WallpaperEngine.fill !== "crop"
++                    color: win.color
++                }
++
+                 Loader {
+                     id: loader
+                     anchors.fill: parent
+@@ -174,8 +182,8 @@ Scope {
+                         readonly property bool failed: status === Image.Error
+ 
+                         source: "file://" + wall.path
+-                        fillMode: Image.PreserveAspectCrop
+-                        sourceSize: Qt.size(Math.max(1, win.width), Math.max(1, win.height))
++                        fillMode: Services.WallpaperEngine.imageFill
++                        sourceSize: Services.WallpaperEngine.fullSize ? undefined : Qt.size(Math.max(1, win.width), Math.max(1, win.height))
+                         asynchronous: true
+                         cache: false
+                         smooth: true
+@@ -192,7 +200,7 @@ Scope {
+                         readonly property bool failed: status === Image.Error
+ 
+                         source: "file://" + wall.path
+-                        fillMode: Image.PreserveAspectCrop
++                        fillMode: Services.WallpaperEngine.imageFill
+                         asynchronous: true
+                         cache: false
+                         smooth: true
+@@ -250,7 +258,8 @@ Scope {
+                         VideoOutput {
+                             id: output
+                             anchors.fill: parent
+-                            fillMode: VideoOutput.PreserveAspectCrop
++                            fillMode: Services.WallpaperEngine.fill === "fit" ? VideoOutput.PreserveAspectFit
++                                : Services.WallpaperEngine.fill === "stretch" ? VideoOutput.Stretch : VideoOutput.PreserveAspectCrop
+                         }
+ 
+                         Connections {
+diff --git a/services/WallpaperEngine.qml b/services/WallpaperEngine.qml
+index c8e2aff..355bcc4 100644
+--- a/services/WallpaperEngine.qml
++++ b/services/WallpaperEngine.qml
+@@ -59,6 +59,17 @@ Singleton {
+     readonly property int transitionMode: SettingsConfig.wallpaperTransition === "random" ? pickedTransition
+         : Math.max(0, transitions.indexOf(SettingsConfig.wallpaperTransition))
+ 
++    // How a wallpaper fills the screen (the picker's settings): "crop"
++    // (the default, and for an unknown setting), "fit", "stretch", "center"
++    // or "tile", and that as an Image fill mode. A VideoOutput can only
++    // crop, fit or stretch, so a video centered or tiled is cropped.
++    // Centered, tiled or stretched, a picture is loaded at its own size,
++    // not scaled down to the screen's.
++    readonly property var fillModes: ["crop", "fit", "stretch", "center", "tile"]
++    readonly property string fill: fillModes.includes(SettingsConfig.wallpaperFillMode) ? SettingsConfig.wallpaperFillMode : "crop"
++    readonly property int imageFill: ({ crop: Image.PreserveAspectCrop, fit: Image.PreserveAspectFit, stretch: Image.Stretch, center: Image.Pad, tile: Image.Tile })[fill]
++    readonly property bool fullSize: fill === "center" || fill === "tile" || fill === "stretch"
++
+     // What a file is drawn as: "video", "animated" (GIF/WebP, which may
+     // still be one frame) or "image".
+     function kind(path) {
+diff --git a/settings/SettingsConfig.qml b/settings/SettingsConfig.qml
+index 02e64cb..bb43245 100644
+--- a/settings/SettingsConfig.qml
++++ b/settings/SettingsConfig.qml
+@@ -27,6 +27,7 @@ Singleton {
+     property alias wallpaperAnimateChoice: settingsAdapter.wallpaperAnimateChoice
+     property alias wallpaperPreviewOnPeek: settingsAdapter.wallpaperPreviewOnPeek
+     property alias wallpaperTransition: settingsAdapter.wallpaperTransition
++    property alias wallpaperFillMode: settingsAdapter.wallpaperFillMode
+     property alias wallpaperScheme: settingsAdapter.wallpaperScheme
+     property alias wallhavenApiKey: settingsAdapter.wallhavenApiKey
+     property alias wallhavenCategories: settingsAdapter.wallhavenCategories
+@@ -76,6 +77,9 @@ Singleton {
+             // The transition as the wallpaper changes: one of
+             // WallpaperEngine.transitions, or "random"
+             property string wallpaperTransition: "grow"
++            // How a wallpaper fills the screen: "crop", "fit", "stretch",
++            // "center" or "tile" (see WallpaperEngine.imageFill)
++            property string wallpaperFillMode: "crop"
+             // Noctalia's wallpaper generator scheme ("" = leave Noctalia's
+             // own alone, the "Current" choice in the picker's header).
+             property string wallpaperScheme: ""

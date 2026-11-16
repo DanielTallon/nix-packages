@@ -53,11 +53,16 @@ stdenvNoCC.mkDerivation (finalAttrs: {
   # which this package has none of, so only the circle ever played. A
   # TRANSITION chooser in the picker's settings (wallpaperTransition) picks
   # any of them, or a random one each time.
+  #
+  # Upstream always crops the wallpaper to fill the screen. A FILL MODE
+  # chooser in the picker's settings (wallpaperFillMode) picks crop, fit,
+  # stretch, center or tile, for the desktop and the full-screen preview.
   patches = [
     ./trash-wallpaper.patch
     ./wipe-on-picker-screen.patch
     ./preview-on-peek.patch
     ./choose-transition.patch
+    ./fill-mode.patch
   ];
 
   nativeBuildInputs = [ makeWrapper ];
