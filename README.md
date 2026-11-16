@@ -8,12 +8,33 @@ use and shared here in case they're useful to anyone else:
 - **[`boot-gardener`](https://github.com/DanielTallon/nix-packages/blob/main/boot-gardener)** — Boot Gardener, a bash (`jq` + `fzf`) tool for NixOS to pick, pin, prune, harvest, or garbage-collect boot-menu generations on Limine, systemd-boot, or GRUB, plus a rescue mode for a full `/boot` partition. Own project, MIT licensed.
 - **[`proton-wineland`](./proton-wineland)** — [Proton Wineland](https://github.com/nanomatters/proton-cachyos), a Wayland-focused Proton fork, packaged as a Steam compatibility tool. Restores DLSS, frame generation and ray/path tracing in *The Witcher 3* 5.x with no exe patching. x86_64-linux only. See [proton-wineland](#proton-wineland) below.
 - **[`nixed-error`](./nixed-error)** — explains a failed NixOS rebuild in plain words: what went wrong, the file and line, whether it's your config, upstream, or your machine, and how to fix it. Rule-based (no LLM, no network). Own project, still in testing.
-- **[`wallpaperpicker`](./wallpaperpicker)** — [kwepaperpicker](https://gitlab.com/theblackdon/qs-kwepaperpicker), packaged here as `wallpaperpicker`, a swatch-deck wallpaper picker for Quickshell. Brings its own icon font, and on KDE Plasma hands the chosen wallpaper to Plasma by default. `wallpaperpicker-nixgl` is the same picker for Nix on other distros. See [wallpaperpicker](#wallpaperpicker) below. GPL-3.0-or-later.
-- **[`flow-desktop`](./flow-desktop)** — [Flow Desktop](https://github.com/Flow-Tube/Flow-Desktop), a privacy-respecting YouTube and YouTube Music client (Tauri 2), built from source. Based on [olafkfreund/nixos-FlowTube](https://github.com/olafkfreund/nixos-FlowTube)'s package, tracking upstream main, plus a local patch that adds thumbnail previews to the seekbar. GPL-3.0.
+- **[`wallpaperpicker`](./wallpaperpicker)** — [kwepaperpicker](https://gitlab.com/theblackdon/qs-kwepaperpicker), packaged here as `wallpaperpicker`, a swatch-deck wallpaper picker for Quickshell. Brings its own icon font, and on KDE Plasma hands the chosen wallpaper to Plasma by default. Local patches add a trash button, a choice of transition and fill mode, and a transition on the picker's own screen. `wallpaperpicker-nixgl` is the same picker for Nix on other distros, and a Home Manager module (`homeModules.wallpaperpicker`) sets it up with autostart, a Plasma shortcut and colors from the wallpaper. See [wallpaperpicker](#wallpaperpicker) below. GPL-3.0-or-later.
+- **[`flow-desktop`](./flow-desktop)** — [Flow Desktop](https://github.com/Flow-Tube/Flow-Desktop), a privacy-respecting YouTube and YouTube Music client (Tauri 2), built from source. Based on [olafkfreund/nixos-FlowTube](https://github.com/olafkfreund/nixos-FlowTube)'s package, tracking upstream main, plus local patches: thumbnail previews above the seekbar, a reload button next to Back/Forward (also F5 and Ctrl+R), and music played without WebAudio unless the EQ is on, which fixes silent playback on some Bluetooth headphones. GPL-3.0.
 - **[`photo2scan`](./photo2scan)** — turns phone photos of paper pages into a scanned-looking PDF: finds the page, undoes the camera angle, evens out the lighting. Handy for forms someone photographed at an angle and sent you. Also a [web page](https://danieltallon.github.io/nix-packages/photo2scan/) that works on Windows, Linux and phones with nothing to install, and also takes existing PDFs and Word files. See [photo2scan](#photo2scan) below. Own project, MIT licensed.
 - **[`brave-origin`](./brave-origin)** — [Brave Origin](https://brave.com/origin/), Brave with Rewards, Wallet, VPN, AI, News and telemetry taken out (free on Linux). Repackaged from the `.deb` in Brave's apt repo, adapted from the nixpkgs package removed in November 2026. A [scheduled workflow](./.github/workflows/update-brave-origin.yml) checks for a new release twice a day, builds it, and commits the bump. Policies go in `/etc/brave/policies/managed/`. x86_64-linux and aarch64-linux. MPL-2.0.
 
 Each package is exposed on its own — installing or building one never pulls in the others.
+
+## Binary cache
+
+A [GitHub Action](./.github/workflows/cachix.yml) builds every x86_64-linux package on
+each push to `main` and uploads them to [Cachix](https://danieltallon.cachix.org), so
+`flow-desktop` and the rest download instead of compiling. `brave-origin`,
+`proton-wineland` and `kenku-fm` are built there too but not uploaded: they're
+repackaged upstream binaries (large, nothing to compile), and Kenku FM is unfree.
+
+On NixOS:
+
+```nix
+nix.settings = {
+  substituters = [ "https://danieltallon.cachix.org" ];
+  trusted-public-keys = [ "danieltallon.cachix.org-1:SZgjnye3onVT+RjHyc4LgDAhTVCJTf+9MZnSXxANFVs=" ];
+};
+```
+
+Elsewhere, add the same two lines to `/etc/nix/nix.conf` as `extra-substituters = …`
+and `extra-trusted-public-keys = …`, then restart the Nix daemon. Or, with the
+[cachix](https://docs.cachix.org/installation) tool, run `cachix use danieltallon`.
 
 ## Usage
 
@@ -25,6 +46,7 @@ nix run github:DanielTallon/nix-packages#boot-gardener
 nix run github:DanielTallon/nix-packages#nixed-error
 nix run github:DanielTallon/nix-packages#wallpaperpicker
 nix run github:DanielTallon/nix-packages#flow-desktop
+nix run github:DanielTallon/nix-packages#brave-origin
 nix run github:DanielTallon/nix-packages#photo2scan -- -o form.pdf photo1.jpg photo2.jpg
 ```
 **Run without installing, and without flakes enabled:**
@@ -35,6 +57,7 @@ nix run --extra-experimental-features "nix-command flakes" github:DanielTallon/n
 nix run --extra-experimental-features "nix-command flakes" github:DanielTallon/nix-packages#nixed-error
 nix run --extra-experimental-features "nix-command flakes" github:DanielTallon/nix-packages#wallpaperpicker
 nix run --extra-experimental-features "nix-command flakes" github:DanielTallon/nix-packages#flow-desktop
+nix run --extra-experimental-features "nix-command flakes" github:DanielTallon/nix-packages#brave-origin
 nix run --extra-experimental-features "nix-command flakes" github:DanielTallon/nix-packages#photo2scan -- -o form.pdf photo1.jpg photo2.jpg
 ```
 
@@ -50,6 +73,7 @@ nix profile install github:DanielTallon/nix-packages#boot-gardener
 nix profile install github:DanielTallon/nix-packages#nixed-error
 nix profile install github:DanielTallon/nix-packages#wallpaperpicker
 nix profile install github:DanielTallon/nix-packages#flow-desktop
+nix profile install github:DanielTallon/nix-packages#brave-origin
 nix profile install github:DanielTallon/nix-packages#photo2scan
 ```
 
@@ -71,7 +95,13 @@ inputs.nix-packages.url = "github:DanielTallon/nix-packages";
 nixpkgs.overlays = [ inputs.nix-packages.overlays.default ];
 # now available anywhere in your config as pkgs.lgl-papercutter / pkgs.kenku-fm /
 # pkgs.boot-gardener / pkgs.proton-wineland / pkgs.nixed-error /
-# pkgs.wallpaperpicker / pkgs.flow-desktop / pkgs.photo2scan
+# pkgs.wallpaperpicker / pkgs.flow-desktop / pkgs.photo2scan / pkgs.brave-origin
+```
+
+**As a Home Manager module** (just `wallpaperpicker` for now; see [its section](#home-manager)):
+```nix
+imports = [ inputs.nix-packages.homeModules.wallpaperpicker ];
+programs.wallpaperpicker.enable = true;
 ```
 
 ## A note on `kenku-fm`
@@ -96,6 +126,60 @@ nix run github:DanielTallon/nix-packages#wallpaperpicker -- toggle
 - **Font:** the Material Symbols icon font comes with the package. Nothing to install.
 - **Wallpaper:** on KDE Plasma it hands the chosen wallpaper to Plasma (`plasma-apply-wallpaperimage {}`). Elsewhere it draws the wallpaper itself, videos included. Plasma's command only takes images, so to use video wallpapers on Plasma, clear the command in the picker's settings (the gear at the top right).
 - **Files:** settings and the matugen colour scheme are kept in `~/.config/wallpaperpicker` (an old `~/.config/kwepaperpicker` is moved there on first run). Wallpapers are read from `~/Pictures/wallpapers` by default.
+- **Updates:** after an update, the next `toggle` notices the picker still running is the old build, stops it and starts the new one. No logging out needed.
+
+Added by this package's patches:
+
+- **Trash:** the trash button by the heart (or Delete, pressed twice) moves the local wallpaper in front to the trash and unfavorites it. The one on the desktop can't be trashed; set another first.
+- **Transition:** upstream ties its 16 transitions to its own desktop themes, so only the circle ever played. **TRANSITION** in the picker's settings picks any of them, or a random one each time. It now also plays on the screen the picker is open on: the preview fades to the desktop behind the card as the picker closes.
+- **Fill mode:** **FILL MODE** in the settings picks crop (upstream's only behavior), fit, stretch, center or tile, for the desktop and the full-screen preview.
+- **Preview:** the full-screen preview of the card in front shows only while peeking (hold Space), so the transition is your first full look at a new wallpaper. A switch in the settings brings back the always-on preview.
+
+### Home Manager
+
+`homeModules.wallpaperpicker` sets the picker up the way I use it:
+
+```nix
+programs.wallpaperpicker = {
+  enable = true;
+  autostart = true;            # start in the background on login (default)
+  hotkey = "Meta+Space";       # Plasma shortcut for `wallpaperpicker toggle`
+  matugen.enable = true;       # the picker's own UI takes the wallpaper's colors
+  matugen.plasmaColorScheme = true;  # and so does Plasma: a dark scheme from each wallpaper
+  nixGL = true;                # other distros only, see below
+};
+```
+
+- `matugen.enable` writes `~/.config/matugen/config.toml`, replacing any matugen config you have.
+- `matugen.plasmaColorScheme` replaces your Plasma color scheme with one made from each wallpaper, and turns off Plasma's own accent color from wallpaper. To go back, turn it off and pick a scheme in System Settings → Colors & Themes.
+- `hotkey` and `matugen.plasmaColorScheme` need [plasma-manager](https://github.com/nix-community/plasma-manager)'s Home Manager module imported as well. Everything else works on any desktop the picker runs on.
+
+#### Home Manager on other distros
+
+For a distro other than NixOS (PikaOS, Fedora, Arch, ...), there's a starter flake with all of
+the above, plasma-manager and nixGL already wired in. Nix needs flakes enabled (add
+`--extra-experimental-features "nix-command flakes"` to each `nix` command otherwise).
+
+```sh
+mkdir -p ~/.config/home-manager && cd ~/.config/home-manager
+nix flake init -t github:DanielTallon/nix-packages#wallpaperpicker-home
+```
+
+1. In `flake.nix`, set `username` to your login name (`whoami`).
+2. In `home.nix`, check the `programs.wallpaperpicker` settings. On NVIDIA's proprietary
+   driver, change `defaultWrapper` to `"nvidia"` there, and add `--impure` to every switch below.
+3. Switch to it (the first time, this runs Home Manager without installing it):
+
+   ```sh
+   nix run home-manager/master -- switch --flake ~/.config/home-manager
+   ```
+
+   After that, `home-manager switch --flake ~/.config/home-manager` applies changes, and
+   `nix flake update` in that folder followed by a switch updates everything.
+4. Log out and back in. The picker starts in the background; Meta+Space opens it.
+
+Add your other Nix packages to `home.packages` in `home.nix`. The [binary cache](#binary-cache)
+saves building the picker yourself.
 
 ### Other distros with Nix
 
@@ -134,6 +218,9 @@ without the drivers.
 
 Don't use any of these on NixOS. They replace the system's drivers with nixGL's.
 
+With Home Manager, `programs.wallpaperpicker.nixGL = true` does the same; see
+[Home Manager on other distros](#home-manager-on-other-distros).
+
 ## Updating a package
 
 `lgl-papercutter` and `kenku-fm` are pinned (source + hash), so they won't
@@ -156,15 +243,20 @@ have it as a flake input, `nix flake update nix-packages` pulls in whatever's on
 (`export-nix.py` there), so regenerate it rather than editing the embedded
 script by hand.
 
-`proton-wineland` updates itself: a daily GitHub Action bumps
-`proton-wineland/sources.json` (see its section below), so there's nothing to do
-by hand beyond `nix flake update nix-packages`.
+`proton-wineland` and `brave-origin` update themselves: scheduled GitHub Actions
+bump their `sources.json` (see proton-wineland's section below), so there's
+nothing to do by hand beyond `nix flake update nix-packages`.
 
 ## Structure
 
 ```
 nix-packages/
 ├── flake.nix
+├── .github/workflows/
+│   ├── cachix.yml                  # builds everything, fills the binary cache
+│   ├── pages.yml                   # publishes photo2scan's web page
+│   ├── update-brave-origin.yml
+│   └── update-proton-wineland.yml
 ├── lgl-papercutter/
 │   └── lgl-papercutter.nix
 ├── kenku-fm/
@@ -174,10 +266,21 @@ nix-packages/
 ├── nixed-error/
 │   └── nixed-error.nix
 ├── wallpaperpicker/
-│   └── wallpaperpicker.nix
+│   ├── wallpaperpicker.nix
+│   ├── *.patch                     # trash, transitions, fill mode, preview
+│   ├── home-module.nix             # homeModules.wallpaperpicker
+│   └── home-template/              # templates.wallpaperpicker-home
+│       ├── flake.nix
+│       └── home.nix
 ├── flow-desktop/
 │   ├── flow-desktop.nix
-│   └── flow-desktop-storyboard-preview.patch
+│   ├── flow-desktop-storyboard-preview.patch
+│   ├── flow-desktop-reload-button.patch
+│   └── flow-desktop-webaudio-only-for-eq.patch
+├── brave-origin/
+│   ├── brave-origin.nix
+│   ├── sources.json
+│   └── update.sh
 ├── photo2scan/
 │   ├── photo2scan.nix
 │   ├── photo2scan.py

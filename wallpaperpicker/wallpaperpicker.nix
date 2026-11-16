@@ -22,6 +22,7 @@ let
   # matugen's scheme type: how bold the colors are. Every option is described
   # at the top of the dotfiles' modules/desktop/wallpaper-colors.nix, which
   # has its own matugenScheme for the login re-apply: keep the two the same.
+  # (home-module.nix reads this one through passthru, so it always matches.)
   matugenScheme = "scheme-vibrant";
 in
 stdenvNoCC.mkDerivation (finalAttrs: {
@@ -125,7 +126,9 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     # reaches the instance started by an older one.
     # `toggle` and `wallhaven` start the picker in the background first if it
     # isn't running (no autostart, `stop`ped, or killed), so a key binding
-    # always works and never needs a terminal left open.
+    # always works and never needs a terminal left open. If the one running
+    # is an older build (the link points elsewhere, e.g. after a rebuild),
+    # they stop it and start this one instead.
     substituteInPlace bin/kwepaperpicker \
       --replace-fail 'cfg="''${XDG_CONFIG_HOME:-$HOME/.config}/wallpaperpicker"' \
                      'cfg="@out@/share/wallpaperpicker"
@@ -136,7 +139,11 @@ mkdir -p "$WALLPAPERPICKER_STATE/colors"
 link="''${XDG_STATE_HOME:-$HOME/.local/state}/wallpaperpicker/shell"
 ready() { qs -p "$link" ipc show 2>/dev/null | grep -q "^target wallpaper"; }
 ensure() {
-    [[ -e $link ]] && ready && return
+    if [[ -e $link ]] && ready; then
+        [[ $(readlink "$link") == "$cfg" ]] && return
+        qs -p "$link" kill >/dev/null 2>&1 || true
+        for _ in {1..50}; do ready || break; sleep 0.1; done
+    fi
     mkdir -p "''${link%/*}"; ln -sfn "$cfg" "$link"
     qs -p "$link" --no-duplicate --daemonize >/dev/null 2>&1 || true
     for _ in {1..100}; do ready && return; sleep 0.1; done
@@ -173,6 +180,9 @@ ensure() {
       --prefix QT_PLUGIN_PATH : ${qt6.qtmultimedia}/${qt6.qtbase.qtPluginPrefix} \
       --prefix QT_PLUGIN_PATH : ${qt6.qtimageformats}/${qt6.qtbase.qtPluginPrefix}
   '';
+
+  # Read by home-module.nix, so its login re-apply uses the same scheme.
+  passthru = { inherit matugenScheme; };
 
   meta = {
     description = "Swatch-deck wallpaper picker for Quickshell";

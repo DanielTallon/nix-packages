@@ -58,6 +58,17 @@
     ) // {
       # Overlay-style consumption: add this to your own `pkgs` and all
       # packages become ordinary attributes (pkgs.lgl-papercutter, etc.).
+      # Home Manager module: programs.wallpaperpicker (package, autostart,
+      # Plasma shortcut, matugen colors). See wallpaperpicker/home-module.nix.
+      homeModules.wallpaperpicker = import ./wallpaperpicker/home-module.nix { inherit self; };
+
+      # A starter Home Manager flake for other distros, set up with the picker:
+      # nix flake init -t github:DanielTallon/nix-packages#wallpaperpicker-home
+      templates.wallpaperpicker-home = {
+        path = ./wallpaperpicker/home-template;
+        description = "Home Manager on a distro other than NixOS, with wallpaperpicker";
+      };
+
       overlays.default = final: prev: {
         lgl-papercutter = final.callPackage ./lgl-papercutter/lgl-papercutter.nix { };
         kenku-fm = final.callPackage ./kenku-fm/kenku-fm.nix { };
