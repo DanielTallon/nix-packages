@@ -78,7 +78,8 @@ nix profile install github:DanielTallon/nix-packages#photo2scan
 ```
 
 (`proton-wineland` is a Steam compatibility tool, not a program you run or install
-this way — see its section below.)
+this way — see its section below. On distros other than NixOS, `wallpaperpicker` needs its
+nixGL build instead: see [Other distros](#other-distros-pikaos-arch-fedora-).)
 
 **As a flake input, per-package:**
 ```nix
@@ -121,6 +122,9 @@ nix run github:DanielTallon/nix-packages#wallpaperpicker -- toggle
 ```
 
 (Installed, those are `wallpaperpicker` and `wallpaperpicker toggle`. `wallpaperpicker --help` lists the rest.)
+
+**Not on NixOS?** Those commands won't show the picker on PikaOS, Arch, Fedora and the like. See
+[Other distros](#other-distros-pikaos-arch-fedora-) for installing Nix and the commands that work there.
 
 - **Desktop:** needs a Wayland desktop Quickshell runs on, such as KDE Plasma, Hyprland, Sway or niri. GNOME doesn't work.
 - **Font:** the Material Symbols icon font comes with the package. Nothing to install.
@@ -186,45 +190,77 @@ nix flake init -t github:DanielTallon/nix-packages#wallpaperpicker-home
 Add your other Nix packages to `home.packages` in `home.nix`. The [binary cache](#binary-cache)
 saves building the picker yourself.
 
-### Other distros with Nix
+### Other distros (PikaOS, Arch, Fedora, ...)
 
-Programs from Nix often can't find the graphics drivers on other distros. If the log shows
-`qt.qpa.wayland: EGL not available` and the picker never appears, this is why.
+The picker runs on any distro with Nix, alongside the distro's own packages. It
+doesn't need NixOS.
 
-`toggle` starts the picker in the background if it isn't running, then opens it, so on
-other distros one command does both. Run the same command again to close it, or bind it
-to a key (on Plasma: System Settings → Shortcuts → Add Command).
-
-For Mesa drivers (Intel, AMD, nouveau), use the build that runs through [nixGL](https://github.com/nix-community/nixGL):
+**1. Install Nix,** if you haven't. The [official installer](https://nixos.org/download/#nix-install-linux)
+(answer yes to its questions):
 
 ```sh
-nix run github:DanielTallon/nix-packages#wallpaperpicker-nixgl -- toggle
+sh <(curl --proto '=https' --tlsv1.2 -L https://nixos.org/nix/install) --daemon
 ```
 
-For NVIDIA's proprietary driver (any GeForce card on the official driver, including
-the RTX 50 series), nixGL has to detect the installed driver, which needs `--impure`:
+Open a new terminal afterwards. Then turn on flakes, which the commands below use:
 
 ```sh
+mkdir -p ~/.config/nix
+echo "experimental-features = nix-command flakes" >> ~/.config/nix/nix.conf
+```
+
+Optionally, add the [binary cache](#binary-cache) so the picker downloads instead of building.
+
+**2. Graphics drivers.** Programs from Nix can't find the distro's graphics drivers on
+their own: the picker starts, then never appears (the log shows `qt.qpa.wayland: EGL not
+available`). [nixGL](https://github.com/nix-community/nixGL) fixes that, so use the
+nixGL commands below, not plain `wallpaperpicker`:
+
+- **Intel, AMD or nouveau (Mesa):** `wallpaperpicker-nixgl` is the picker with nixGL built in.
+- **NVIDIA's proprietary driver** (any GeForce card on the official driver): nixGL has to
+  read the installed driver's version, which needs `--impure`. The first run downloads the
+  matching driver from NVIDIA, a few hundred MB. After the distro updates the driver, reboot,
+  then update as shown below so the versions match again.
+
+**3. Try it, install it, or set it up with Home Manager.**
+
+*Try it without installing.* `toggle` starts the picker in the background if it isn't
+running, then opens it. Run it again to close it.
+
+```sh
+# Mesa
+nix run github:DanielTallon/nix-packages#wallpaperpicker-nixgl -- toggle
+# NVIDIA
 nix run --impure github:nix-community/nixGL -- nix run github:DanielTallon/nix-packages#wallpaperpicker -- toggle
 ```
 
-The first NVIDIA run downloads the driver matching yours from NVIDIA, a few hundred MB.
-After the distro updates the driver, reboot before running it again so the versions match.
-
-Without flakes enabled, both `nix run`s need the flag:
+*Install it.*
 
 ```sh
-nix run --impure --extra-experimental-features "nix-command flakes" github:nix-community/nixGL -- nix run --extra-experimental-features "nix-command flakes" github:DanielTallon/nix-packages#wallpaperpicker -- toggle
+# Mesa
+nix profile install github:DanielTallon/nix-packages#wallpaperpicker-nixgl
+# NVIDIA: the picker, plus a `nixGL` command matched to your driver
+nix profile install github:DanielTallon/nix-packages#wallpaperpicker
+nix profile install --impure github:nix-community/nixGL
 ```
 
-Always open it with the nixGL command. A plain `toggle` closes and opens a picker that's
-already running, but if the picker isn't running (after a reboot, say), it starts it
+Then bind a key to `wallpaperpicker toggle` (Mesa) or `nixGL wallpaperpicker toggle`
+(NVIDIA): on Plasma, System Settings → Shortcuts → Add New → Command or Script. Always
+open it with that command. A plain `wallpaperpicker toggle` closes and opens a picker
+that's already running, but if it isn't running (after a reboot, say), it starts one
 without the drivers.
 
-Don't use any of these on NixOS. They replace the system's drivers with nixGL's.
+On desktops other than Plasma, where the picker draws the wallpaper itself, also start
+it on login so the wallpaper is there before you open it: add `wallpaperpicker` (or
+`nixGL wallpaperpicker`) to the desktop's autostart. On Plasma that's optional.
 
-With Home Manager, `programs.wallpaperpicker.nixGL = true` does the same; see
-[Home Manager on other distros](#home-manager-on-other-distros).
+To update: `nix profile upgrade --all` (on NVIDIA, `nix profile upgrade --all --impure`,
+which also matches nixGL to a newly updated driver; reboot after the driver update first).
+
+*Set it up with Home Manager*, so autostart, the shortcut and the colors are configured
+for you: see [Home Manager on other distros](#home-manager-on-other-distros).
+
+Don't use nixGL on NixOS. It replaces the system's drivers with nixGL's.
 
 ## Updating a package
 
