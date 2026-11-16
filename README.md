@@ -133,6 +133,7 @@ Added by this package's patches:
 - **Trash:** the trash button by the heart (or Delete, pressed twice) moves the local wallpaper in front to the trash and unfavorites it. The one on the desktop can't be trashed; set another first.
 - **Transition:** upstream ties its 16 transitions to its own desktop themes, so only the circle ever played. **TRANSITION** in the picker's settings picks any of them, or a random one each time. It now also plays on the screen the picker is open on: the preview fades to the desktop behind the card as the picker closes.
 - **Fill mode:** **FILL MODE** in the settings picks crop (upstream's only behavior), fit, stretch, center or tile, for the desktop and the full-screen preview.
+- **Plasma:** Plasma draws the wallpaper there, so upstream plays no transitions on Plasma. Here the picker plays them in a see-through, click-through layer over Plasma's desktop (under windows and panels), has Plasma change the wallpaper underneath as the transition starts, and steps aside a moment after it ends. The fill mode is passed to Plasma as well (`--fill-mode`), so FILL MODE works on Plasma too, unless the command in the settings names a fill mode itself.
 - **Preview:** the full-screen preview of the card in front shows only while peeking (hold Space), so the transition is your first full look at a new wallpaper. A switch in the settings brings back the always-on preview.
 
 ### Home Manager

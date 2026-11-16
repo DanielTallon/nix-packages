@@ -1,0 +1,240 @@
+diff --git a/modules/wallpaper/PickerSettings.qml b/modules/wallpaper/PickerSettings.qml
+index fa3e842..d05bf17 100644
+--- a/modules/wallpaper/PickerSettings.qml
++++ b/modules/wallpaper/PickerSettings.qml
+@@ -628,7 +628,7 @@ Rectangle {
+         }
+ 
+         Note {
+-            text: WallpaperEngine.external ? "Another program draws the wallpaper here (the wallpaper command), so these don't play."
++            text: WallpaperEngine.external && !WallpaperEngine.overlay ? "Another program draws the wallpaper here (the wallpaper command), so these don't play."
+                 : card.transitionOptions[card.transitionIndex].note
+         }
+ 
+@@ -681,7 +681,7 @@ Rectangle {
+         }
+ 
+         Note {
+-            text: WallpaperEngine.external ? "Another program draws the wallpaper here (the wallpaper command), so it sets how the wallpaper fills the screen."
++            text: WallpaperEngine.external && !WallpaperEngine.overlay ? "Another program draws the wallpaper here (the wallpaper command), so it sets how the wallpaper fills the screen."
+                 : card.fillOptions[card.fillIndex].note
+         }
+     }
+diff --git a/modules/wallpaper/Wallpaper.qml b/modules/wallpaper/Wallpaper.qml
+index 38b80bf..412803d 100644
+--- a/modules/wallpaper/Wallpaper.qml
++++ b/modules/wallpaper/Wallpaper.qml
+@@ -525,7 +525,7 @@ Item {
+     // itself is drawn under it (another program's, it can't tell: at once).
+     function bloomed() {
+         spot = 0;
+-        if (pendingSet !== "" || WallpaperEngine.external || WallpaperEngine.drawn === WallpaperEngine.current)
++        if (pendingSet !== "" || (WallpaperEngine.external && !WallpaperEngine.overlay) || WallpaperEngine.drawn === WallpaperEngine.current)
+             close();
+         else
+             revealTimer.start();
+diff --git a/modules/wallpaper/WallpaperLayer.qml b/modules/wallpaper/WallpaperLayer.qml
+index 6f19f7f..a4a2793 100644
+--- a/modules/wallpaper/WallpaperLayer.qml
++++ b/modules/wallpaper/WallpaperLayer.qml
+@@ -22,8 +22,8 @@ import qs.services as Services
+ Scope {
+     Variants {
+         // None while another program draws the wallpaper (a wallpaper
+-        // command is set).
+-        model: Services.WallpaperEngine.external ? [] : Quickshell.screens
++        // command is set), except Plasma: then it's only for transitions.
++        model: Services.WallpaperEngine.external && !Services.WallpaperEngine.overlay ? [] : Quickshell.screens
+ 
+         PanelWindow {
+             id: win
+@@ -47,11 +47,33 @@ Scope {
+             readonly property bool covered: Services.Compositor.covered(modelData)
+             readonly property bool playing: !covered
+ 
++            // Over Plasma (WallpaperEngine.overlay) the window sits above
++            // Plasma's desktop, see-through and click-through, and shows the
++            // wallpaper only while a picture changes: the old one, the
++            // transition, then the new one until Plasma, changed under it
++            // as the transition starts, has faded to it too. The last
++            // picture stays loaded, ready for the next change.
++            readonly property bool overlay: Services.WallpaperEngine.overlay
++            property bool lifted: false
++
+             function show(path) {
+                 if (!path)
+                     return;
++                // Plasma takes only pictures: nothing to play for the rest.
++                if (overlay && Services.WallpaperEngine.kind(path) !== "image") {
++                    anim.stop();
++                    holdTimer.stop();
++                    lifted = false;
++                    waiting = false;
++                    front.path = "";
++                    back.path = "";
++                    Services.WallpaperEngine.drawn = path;
++                    return;
++                }
+                 if (!front.path) {
+                     front.path = path;
++                    if (overlay)
++                        Services.WallpaperEngine.covered();
+                     return;
+                 }
+                 if (front.path === path)
+@@ -74,6 +96,11 @@ Scope {
+                     finish();
+                     return;
+                 }
++                if (overlay) {
++                    holdTimer.stop();
++                    lifted = true;
++                    Services.WallpaperEngine.covered();
++                }
+                 anim.duration = ({ 1: 1300, 4: 1500, 6: 950, 7: 1400, 8: 1400, 9: 1500, 10: 1600, 11: 1500, 12: 1500, 13: 1600, 14: 1500, 15: 1600 })[mode] ?? 1100;
+                 anim.start();
+             }
+@@ -90,6 +117,8 @@ Scope {
+                 else
+                     old.path = "";
+                 Services.WallpaperEngine.drawn = front.path;
++                if (overlay)
++                    holdTimer.restart();
+             }
+ 
+             function unloadRetired() {
+@@ -100,7 +129,8 @@ Scope {
+             }
+ 
+             screen: modelData
+-            WlrLayershell.layer: WlrLayer.Background
++            // Over Plasma: above its desktop, under windows and panels.
++            WlrLayershell.layer: overlay ? WlrLayer.Bottom : WlrLayer.Background
+             WlrLayershell.namespace: "quickshell:wallpaper"
+             WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+             exclusionMode: ExclusionMode.Ignore
+@@ -108,7 +138,7 @@ Scope {
+             anchors.bottom: true
+             anchors.left: true
+             anchors.right: true
+-            color: Colors.background
++            color: overlay ? "transparent" : Colors.background
+             mask: Region {}
+ 
+             Component.onCompleted: show(Services.WallpaperEngine.current)
+@@ -126,6 +156,14 @@ Scope {
+                 }
+             }
+ 
++            // Plasma's own change: started as the transition began, with a
++            // fade of its own.
++            Timer {
++                id: holdTimer
++                interval: 1800
++                onTriggered: win.lifted = false
++            }
++
+             // Not as the picker goes (its own player unloads then).
+             Timer {
+                 id: retireTimer
+@@ -165,7 +203,7 @@ Scope {
+                 Rectangle {
+                     anchors.fill: parent
+                     visible: wall.path !== "" && Services.WallpaperEngine.fill !== "crop"
+-                    color: win.color
++                    color: Colors.background
+                 }
+ 
+                 Loader {
+@@ -282,6 +320,7 @@ Scope {
+             Item {
+                 id: stack
+                 anchors.fill: parent
++                visible: !win.overlay || win.lifted
+ 
+                 Wall {
+                     id: imgA
+@@ -350,7 +389,7 @@ Scope {
+                 id: themeLoader
+                 anchors.fill: parent
+                 z: 3
+-                active: Services.DesktopTheme.enabled
++                active: Services.DesktopTheme.enabled && !win.overlay
+                 sourceComponent: ThemeLayer {
+                     wallpaper: stackTexture
+                 }
+diff --git a/services/WallpaperEngine.qml b/services/WallpaperEngine.qml
+index 355bcc4..1b19d20 100644
+--- a/services/WallpaperEngine.qml
++++ b/services/WallpaperEngine.qml
+@@ -29,6 +29,17 @@ Singleton {
+     // The wallpaper command ("" when Quickshell draws the wallpaper).
+     readonly property string command: SettingsConfig.wallpaperCommand.trim()
+     readonly property bool external: command !== ""
++    // Plasma draws the wallpaper (plasma-apply-wallpaperimage), so its
++    // transitions are played over Plasma's desktop instead: WallpaperLayer
++    // keeps a see-through window there that shows only while a picture
++    // changes, and Plasma's own wallpaper is changed under it.
++    readonly property bool plasmaCommand: /^plasma-apply-wallpaperimage(\s|$)/.test(command)
++    readonly property bool overlay: external && plasmaCommand
++    // The fill mode as Plasma names it, passed along unless the command
++    // names one itself.
++    readonly property string plasmaFill: ({ crop: "preserveAspectCrop", fit: "preserveAspectFit", stretch: "stretch", center: "pad", tile: "tile" })[fill]
++    // A picture whose command waits for its transition to cover the screen.
++    property string coverPending: ""
+     // Why the last run of the command failed ("" when it didn't).
+     property string commandError: ""
+ 
+@@ -112,11 +123,40 @@ Singleton {
+         current = p;
+         serial++;
+         changed(p);
+-        if (external)
++        // Over Plasma, a picture is handed to Plasma once its transition
++        // covers the screen (WallpaperLayer calls covered()), or in a moment
++        // if none starts.
++        if (overlay && kind(p) === "image") {
++            coverPending = p;
++            coverTimer.restart();
++        } else if (external) {
++            coverPending = "";
+             runCommand(p);
++        }
+         apply.exec([Quickshell.shellPath("scripts/wallpaper-apply"), p]);
+     }
+ 
++    // A transition over Plasma's desktop now hides it: Plasma can change.
++    function covered() {
++        coverTimer.stop();
++        if (coverPending === "")
++            return;
++        runCommand(coverPending);
++        coverPending = "";
++    }
++
++    Timer {
++        id: coverTimer
++        interval: 1500
++        onTriggered: root.covered()
++    }
++
++    // Plasma's fill mode follows the picker's setting.
++    onPlasmaFillChanged: {
++        if (overlay && ready && kind(current) === "image")
++            runCommand(current);
++    }
++
+     // The command as a script taking the file as $1: each `{}` becomes it,
+     // quoted for wherever the `{}` stands (bare, in "…" or in '…'), and with
+     // no `{}` the file goes last.
+@@ -152,7 +192,9 @@ Singleton {
+     function runCommand(path) {
+         if (!external || !path)
+             return;
+-        const cmd = fileInCommand(command);
++        let cmd = fileInCommand(command);
++        if (plasmaCommand && !/\s(-f|--fill-mode)(\s|=)/.test(command))
++            cmd = cmd.replace(/^plasma-apply-wallpaperimage/, "plasma-apply-wallpaperimage --fill-mode " + plasmaFill);
+         // Prints "<exit code>\t<last line of its errors>" when it's done.
+         const script = 'err=$(mktemp)\n'
+             + '{ ' + cmd + '\n} </dev/null >/dev/null 2>"$err" &\n'

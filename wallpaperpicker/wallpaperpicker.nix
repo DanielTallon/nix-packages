@@ -58,12 +58,19 @@ stdenvNoCC.mkDerivation (finalAttrs: {
   # Upstream always crops the wallpaper to fill the screen. A FILL MODE
   # chooser in the picker's settings (wallpaperFillMode) picks crop, fit,
   # stretch, center or tile, for the desktop and the full-screen preview.
+  #
+  # On Plasma, Plasma draws the wallpaper (plasma-apply-wallpaperimage), so
+  # no transition ever played. Now the picker plays it in a see-through,
+  # click-through window over Plasma's desktop, has Plasma change the
+  # wallpaper under it as it starts, and steps aside once Plasma has. The
+  # fill mode is passed to Plasma too (--fill-mode), so the two match.
   patches = [
     ./trash-wallpaper.patch
     ./wipe-on-picker-screen.patch
     ./preview-on-peek.patch
     ./choose-transition.patch
     ./fill-mode.patch
+    ./plasma-transitions.patch
   ];
 
   nativeBuildInputs = [ makeWrapper ];
