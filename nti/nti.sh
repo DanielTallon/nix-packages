@@ -31,9 +31,9 @@ NIX=(nix --extra-experimental-features "nix-command flakes")
 
 if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
   B=$'\e[1m' D=$'\e[2m' R=$'\e[0m'
-  OK=$'\e[1;38;5;117m' BAD=$'\e[1;38;5;210m' NOTE=$'\e[38;5;183m'
+  OK=$'\e[1;38;5;117m' BAD=$'\e[1;38;5;210m' NOTE=$'\e[38;5;183m' WARN=$'\e[1;38;2;241;250;140m'
 else
-  B="" D="" R="" OK="" BAD="" NOTE=""
+  B="" D="" R="" OK="" BAD="" NOTE="" WARN=""
 fi
 
 FZF_COLORS="fg:#c5c8e6,fg+:#f8f8f2:bold,bg+:#2a2d4a,selected-bg:#262a48"
@@ -409,7 +409,7 @@ cmd_list() {
   cfg=$(config_paths)
   list_rows "$rows" "$info" "$cfg" | column -t -s $'\t'
   if out_of_sync; then
-    printf '\n%sNot synced yet: run %snti sync%s%s to install and remove what the list says.%s\n' "$NOTE" "$B" "$R" "$NOTE" "$R"
+    printf '\nThe list changed since the last sync.\n%sRun nti sync to install and remove what it says.%s\n' "$WARN" "$R"
   fi
 }
 
@@ -528,9 +528,9 @@ menu() {
         else
           printf 'PACKAGE\n(nothing yet: press a to add something)\n'
         fi
-      } | fzf --style full --layout reverse --multi --no-input \
+      } | fzf --style full --layout reverse --multi --no-input --ansi \
         --header-lines 1 --header-first \
-        --header "Programs on trial, no rebuild needed.  List: ${FILE/#$HOME/\~}$(out_of_sync && printf '\n%s' "The list changed since the last sync: press s to install and remove what it says.")" \
+        --header "Programs on trial, no rebuild needed.  List: ${FILE/#$HOME/\~}$(out_of_sync && printf '\n%s\n%s' "The list changed since the last sync." "${WARN}Press s to install and remove what it says.${R}")" \
         --border-label " nti " "${FZF_THEME[@]}" \
         --footer "  a:add   d:drop   t:try   k:keep for good   e:edit list   s:sync   c:clean   q:quit"$'\n'"  Tab:mark several   ?:help" \
         --bind 'q:abort' --bind '?:toggle-preview' \
