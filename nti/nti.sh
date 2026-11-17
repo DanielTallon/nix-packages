@@ -261,13 +261,22 @@ cmd_sync() {
     fi
   else
     say "${D}Building the list...${R}"
-    out=$(NTI_FILE="$FILE" NTI_NIXPKGS="$NIXPKGS" "${NIX[@]}" build --impure --no-link --print-out-paths --expr "$PRELUDE"'
+    local log
+    log=$(mktemp)
+    # Nix's progress still shows; its errors are also kept, to explain below.
+    if ! out=$(NTI_FILE="$FILE" NTI_NIXPKGS="$NIXPKGS" "${NIX[@]}" build --impure --no-link --print-out-paths --expr "$PRELUDE"'
       pkgs.buildEnv {
         name = "nti-packages";
         paths = let f = import (builtins.getEnv "NTI_FILE"); in
           f (builtins.intersectAttrs (builtins.functionArgs f) { inherit pkgs lib; });
         extraOutputsToInstall = [ "man" ];
-      }') || die "the list didn't build, so nothing changed. Fix $FILE (or 'nti drop' the package above) and run 'nti sync'."
+      }' 2> >(tee "$log" >&2)); then
+      sleep 0.1 # let tee finish writing
+      explain_build_failure "$log"
+      rm -f "$log"
+      return 1
+    fi
+    rm -f "$log"
     current=$(profile_element_path)
     if [[ "$current" != "$out" ]]; then
       # Built first, so the swap is two quick steps that can't fail halfway
@@ -288,12 +297,33 @@ cmd_sync() {
   return 0
 }
 
+# After a failed build: the common reason in plain words. Nothing is
+# installed or removed when the build fails.
+explain_build_failure() {
+  local log="$1" sub names
+  printf '\n'
+  if grep -q "conflicting subpath" "$log"; then
+    # The two store paths quoted after the message: /nix/store/HASH-NAME/SUBPATH
+    mapfile -t names < <(grep -o "/nix/store/[a-z0-9]\{32\}-[^/'\`]*/[^'\`]*" "$log" | head -n 2)
+    sub=$(sed 's|^/nix/store/[^/]*/||' <<<"${names[0]:-}")
+    printf '%sTwo packages on the list both have %s:%s\n' "$BAD" "${sub:-the same file}" "$R"
+    for n in "${names[@]}"; do
+      n=${n#/nix/store/*-}
+      say "  ${n%%/*}"
+    done
+    say "Keep just one of them on the list."
+  else
+    printf '%sThe list didn'\''t build (Nix'\''s error is above).%s\n' "$BAD" "$R"
+  fi
+}
+
 cmd_add() {
   [[ $# -gt 0 ]] || die "add what? e.g. nti add ripgrep"
   ensure_file
-  local info a added=0
+  local info a added=0 backup new=()
   say "${D}Looking them up in nixpkgs...${R}"
   info=$(info_json "$@") || die "couldn't read nixpkgs ($NIXPKGS)."
+  backup=$(cat "$FILE")
   for a in "$@"; do
     if on_list "$a"; then
       note "$a is already on the list."
@@ -303,26 +333,38 @@ cmd_add() {
     else
       file_add "$a"
       added=1
+      new+=("$a")
       say "Added $B$a$R $(jq -r --arg a "$a" '.[$a].version' <<<"$info")"
     fi
   done
-  [[ $added -eq 1 ]] && cmd_sync
+  if [[ $added -eq 1 ]] && ! cmd_sync; then
+    printf '%s\n' "$backup" >"$FILE"
+    note "So $(printf '%s, ' "${new[@]}" | sed 's/, $//') went back off the list, and nothing was installed."
+    return 1
+  fi
   return 0
 }
 
 cmd_drop() {
   [[ $# -gt 0 ]] || die "drop what? e.g. nti drop ripgrep"
   ensure_file
-  local a dropped=0
+  local a dropped=0 backup
+  backup=$(cat "$FILE")
   for a in "$@"; do
     if on_list "$a"; then
       file_drop "$a"
       dropped=1
+    elif synced_attrs | grep -qxF -- "$a"; then
+      dropped=1 # off the list already, still installed: the sync removes it
     else
       note "$a isn't on the list."
     fi
   done
-  [[ $dropped -eq 1 ]] && cmd_sync
+  if [[ $dropped -eq 1 ]] && ! cmd_sync; then
+    printf '%s\n' "$backup" >"$FILE"
+    note "The list is back as it was; nothing was removed."
+    return 1
+  fi
   [[ $dropped -eq 1 ]] && say "${D}What it left in /nix/store goes with your next garbage collection, or now with 'nti clean'.${R}"
   return 0
 }
@@ -359,19 +401,32 @@ cmd_list() {
   ensure_file
   local rows info cfg
   rows=$(entries)
-  if [[ -z "$rows" ]]; then
+  if [[ -z "$rows" && -z "$(pending_removals)" ]]; then
     say "Nothing on the list. Add something with ${B}nti add PKG${R}."
     return 0
   fi
   info=$(info_json $(cut -f1 <<<"$rows")) || info='{}'
   cfg=$(config_paths)
   list_rows "$rows" "$info" "$cfg" | column -t -s $'\t'
+  if out_of_sync; then
+    printf '\n%sNot synced yet: run %snti sync%s%s to install and remove what the list says.%s\n' "$NOTE" "$B" "$R" "$NOTE" "$R"
+  fi
 }
+
+# What the last sync installed, one attr per line.
+synced_attrs() { grep . "$SYNCED" 2>/dev/null | sort -u || true; }
+
+# Installed by the last sync, but not on the list any more.
+pending_removals() { comm -23 <(synced_attrs) <(attrs | sort -u); }
+
+# The list and what's installed differ (a hand edit not synced yet).
+out_of_sync() { [[ "$(synced_attrs)" != "$(attrs | sort -u)" ]]; }
 
 # One line per package: name, version, age, note, description.
 list_rows() {
-  local rows="$1" info="$2" cfg="$3" a d days age ver desc out flag today
+  local rows="$1" info="$2" cfg="$3" a d days age ver desc out flag today synced
   today=$(date +%s)
+  synced=$(synced_attrs)
   printf 'PACKAGE\tVERSION\tFOR\tSTATUS\tDESCRIPTION\n'
   while IFS=$'\t' read -r a d; do
     age="-"
@@ -383,13 +438,18 @@ list_rows() {
     out=$(jq -r --arg a "$a" '.[$a].out // ""' <<<"$info")
     if [[ $(jq -r --arg a "$a" '.[$a].ok // false' <<<"$info") != true ]]; then
       flag="broken"
+    elif ! grep -qxF -- "$a" <<<"$synced"; then
+      flag="to install"
     elif [[ -n "$out" ]] && grep -qxF -- "$out" <<<"$cfg"; then
       flag="in config"
     else
       flag="on trial"
     fi
     printf '%s\t%s\t%s\t%s\t%s\n' "$a" "${ver:--}" "$age" "$flag" "${desc:0:60}"
-  done <<<"$rows"
+  done < <(grep . <<<"$rows" || true)
+  while read -r a; do
+    [[ -n "$a" ]] && printf '%s\t-\t-\tto remove\t(off the list, still installed until you sync)\n' "$a"
+  done < <(pending_removals)
 }
 
 cmd_edit() {
@@ -400,8 +460,9 @@ cmd_edit() {
   after=$(attrs)
   if [[ "$before" == "$after" ]]; then
     note "No change to the list."
-  else
-    cmd_sync
+  elif ! cmd_sync; then
+    note "Your edit is saved but not installed. Fix the list ('nti edit') and it will be."
+    return 1
   fi
 }
 
@@ -432,12 +493,20 @@ menu_add() {
       fzf --style full --layout reverse --multi \
         --border-label " nti: add " "${FZF_THEME[@]}" \
         --header "Results for: $words" \
-        --footer "  Enter:add   Tab:mark several   Esc:back" |
+        --footer "  Enter:add   Tab:mark (and move down) to add several   Esc:back" |
       awk '{print $1}'
   ) || return 0
   [[ -n "$picked" ]] || return 0
+  # Tab marks a line and moves down, so moving with Tab marks everything it
+  # passes: check before adding several.
+  if [[ $(wc -l <<<"$picked") -gt 1 ]]; then
+    printf '\nAdd these %s?\n' "$(wc -l <<<"$picked")"
+    sed 's/^/  /' <<<"$picked"
+    read -rp "[y/N] " yn
+    [[ "$yn" == [yY]* ]] || { note "Nothing added."; pause; return 0; }
+  fi
   # shellcheck disable=SC2086
-  cmd_add $picked
+  cmd_add $picked || true
   pause
 }
 
@@ -454,14 +523,14 @@ menu() {
     cfg=$(config_paths)
     raw=$(
       {
-        if [[ -n "$rows" ]]; then
+        if [[ -n "$rows" || -n "$(pending_removals)" ]]; then
           list_rows "$rows" "$info" "$cfg" | column -t -s $'\t'
         else
           printf 'PACKAGE\n(nothing yet: press a to add something)\n'
         fi
       } | fzf --style full --layout reverse --multi --no-input \
         --header-lines 1 --header-first \
-        --header "Programs on trial, no rebuild needed.  List: ${FILE/#$HOME/\~}" \
+        --header "Programs on trial, no rebuild needed.  List: ${FILE/#$HOME/\~}$(out_of_sync && printf '\n%s' "The list changed since the last sync: press s to install and remove what it says.")" \
         --border-label " nti " "${FZF_THEME[@]}" \
         --footer "  a:add   d:drop   t:try   k:keep for good   e:edit list   s:sync   c:clean   q:quit"$'\n'"  Tab:mark several   ?:help" \
         --bind 'q:abort' --bind '?:toggle-preview' \
@@ -472,11 +541,11 @@ menu() {
     picked=$(tail -n +2 <<<"$raw" | awk '{print $1}' | grep -v '^(nothing' || true)
     case "$key" in
       a) menu_add ;;
-      d) [[ -n "$picked" ]] && { cmd_drop $picked; pause; } ;;
+      d) [[ -n "$picked" ]] && { cmd_drop $picked || true; pause; } ;;
       t) [[ -n "$picked" ]] && { cmd_try "$(head -n1 <<<"$picked")"; } ;;
       k) [[ -n "$picked" ]] && { printf '\n'; cmd_adopt $picked; pause; } ;;
-      e) cmd_edit; pause ;;
-      s) printf '\n'; cmd_sync; pause ;;
+      e) cmd_edit || true; pause ;;
+      s) printf '\n'; cmd_sync || true; pause ;;
       c) printf '\n'; cmd_clean; pause ;;
       enter) [[ -n "$picked" ]] && { printf '\n'; NTI_ATTR="$(head -n1 <<<"$picked")" show_one; pause; } ;;
     esac

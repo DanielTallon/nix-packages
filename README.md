@@ -455,7 +455,8 @@ with pkgs; [
 
 `nti add` and `nti drop` edit it for you; you can also edit it in any editor and run
 `nti sync`. Sync installs exactly what's on the list and removes anything that isn't, so
-the list is always the truth.
+the list is always the truth. Until you sync, `nti` and `nti list` show hand edits as
+**to install** or **to remove** (commenting a line out with `#` counts as removing it).
 
 **How it installs:** the whole list is built as one entry in your Nix user profile, named
 `nti-packages`. It's already on your PATH and in your app menu wherever Nix is installed,
