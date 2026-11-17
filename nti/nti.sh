@@ -20,6 +20,8 @@ FILE="${NTI_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/nti/packages.nix}"
 NIXPKGS="${NTI_NIXPKGS:-nixpkgs}"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/nti"
 SYNCED="$STATE_DIR/synced"
+# "attr<TAB>version" for each package the last sync installed.
+VERSIONS="$STATE_DIR/versions"
 ELEMENT="nti-packages"
 # A profile other than your default one (nix profile --profile), if set.
 PROFILE_ARGS=()
@@ -251,8 +253,10 @@ profile_element_path() {
 cmd_sync() {
   ensure_file
   mkdir -p "$STATE_DIR"
-  local before after new gone current out
+  local before after new gone current out changed=0 old_versions new_versions updated=""
   before=$(cat "$SYNCED" 2>/dev/null || true)
+  old_versions=$(cat "$VERSIONS" 2>/dev/null || true)
+  new_versions=""
   after=$(attrs | sort -u)
 
   if [[ -z "$after" ]]; then
@@ -278,7 +282,11 @@ cmd_sync() {
     fi
     rm -f "$log"
     current=$(profile_element_path)
+    # Versions now, to say what a sync updated (same nixpkgs as the build).
+    # shellcheck disable=SC2046
+    new_versions=$(info_json $(printf '%s\n' "$after") | jq -r 'to_entries[] | "\(.key)\t\(.value.version)"' || true)
     if [[ "$current" != "$out" ]]; then
+      changed=1
       # Built first, so the swap is two quick steps that can't fail halfway
       # on a download or a compile.
       if [[ -n "$current" ]] || profile_has_element; then
@@ -290,10 +298,25 @@ cmd_sync() {
 
   new=$(comm -13 <(printf '%s\n' "$before" | grep .) <(printf '%s\n' "$after" | grep .) || true)
   gone=$(comm -23 <(printf '%s\n' "$before" | grep .) <(printf '%s\n' "$after" | grep .) || true)
+  # Packages that were installed before and now have another version.
+  if [[ -n "$old_versions" && -n "$new_versions" ]]; then
+    updated=$(awk -F'\t' '
+      NR == FNR { old[$1] = $2; next }
+      ($1 in old) && old[$1] != $2 { printf "%s%s %s → %s", (n++ ? ", " : ""), $1, old[$1], $2 }
+    ' <(printf '%s\n' "$old_versions") <(printf '%s\n' "$new_versions"))
+  fi
   printf '%s\n' "$after" >"$SYNCED"
+  printf '%s\n' "$new_versions" >"$VERSIONS"
   [[ -n "$new" ]] && ok "Installed: $(paste -sd' ' <<<"$new" | sed 's/ /, /g')"
   [[ -n "$gone" ]] && ok "Removed: $(paste -sd' ' <<<"$gone" | sed 's/ /, /g')"
-  [[ -z "$new" && -z "$gone" ]] && ok "Up to date: $(wc -l < <(printf '%s\n' "$after" | grep .)) package(s) on the list."
+  [[ -n "$updated" ]] && ok "Updated: $updated"
+  if [[ -z "$new" && -z "$gone" && -z "$updated" ]]; then
+    if [[ $changed -eq 1 && -n "$before" ]]; then
+      ok "Refreshed: same versions, with newer libraries underneath."
+    else
+      ok "Up to date: $(wc -l < <(printf '%s\n' "$after" | grep .)) package(s) on the list."
+    fi
+  fi
   return 0
 }
 

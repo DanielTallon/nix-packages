@@ -11,7 +11,7 @@ use and shared here in case they're useful to anyone else:
 - **[`wallpaperpicker`](./wallpaperpicker)** — [kwepaperpicker](https://gitlab.com/theblackdon/qs-kwepaperpicker), packaged here as `wallpaperpicker`, a swatch-deck wallpaper picker for Quickshell. Brings its own icon font, and on KDE Plasma hands the chosen wallpaper to Plasma by default. Local patches add a trash button, a choice of transition and fill mode, and a transition on the picker's own screen. `wallpaperpicker-nixgl` is the same picker for Nix on other distros, and a Home Manager module (`homeModules.wallpaperpicker`) sets it up with autostart, a Plasma shortcut and colors from the wallpaper. See [wallpaperpicker](#wallpaperpicker) below. GPL-3.0-or-later.
 - **[`flow-desktop`](./flow-desktop)** — [Flow Desktop](https://github.com/Flow-Tube/Flow-Desktop), a privacy-respecting YouTube and YouTube Music client (Tauri 2), built from source. Based on [olafkfreund/nixos-FlowTube](https://github.com/olafkfreund/nixos-FlowTube)'s package, tracking upstream main, plus local patches: thumbnail previews above the seekbar, a reload button next to Back/Forward (also F5 and Ctrl+R), and music played without WebAudio unless the EQ is on, which fixes silent playback on some Bluetooth headphones. GPL-3.0.
 - **[`photo2scan`](./photo2scan)** — turns phone photos of paper pages into a scanned-looking PDF: finds the page, undoes the camera angle, evens out the lighting. Handy for forms someone photographed at an angle and sent you. Also a [web page](https://danieltallon.github.io/nix-packages/photo2scan/) that works on Windows, Linux and phones with nothing to install, and also takes existing PDFs and Word files. See [photo2scan](#photo2scan) below. Own project, MIT licensed.
-- **[`nti`](./nti)** — Nix Temporary Install (or Not That Into): try programs from nixpkgs without a system rebuild. They're kept in a plain list file you can edit by hand, installed to your Nix user profile, and gone when you take them off the list. A menu in the style of `boot-gardener`. Works on NixOS and on other distros with Nix. See [nti](#nti) below. Own project, MIT licensed.
+- **[`nti`](./nti)** — Nix Temporary Install: try out programs from nixpkgs without a full system rebuild. They're kept in a plain list file you can see and edit by hand, and they are installed to your Nix user profile. When you take them off the list, they are gone from your profile. This works on NixOS and on other distros with Nix. See [nti](#nti) below. This is my own project, covered by the MIT licensed.
 - **[`brave-origin`](./brave-origin)** — [Brave Origin](https://brave.com/origin/), Brave with Rewards, Wallet, VPN, AI, News and telemetry taken out (free on Linux). Repackaged from the `.deb` in Brave's apt repo, adapted from the nixpkgs package removed in November 2026. A [scheduled workflow](./.github/workflows/update-brave-origin.yml) checks for a new release twice a day, builds it, and commits the bump. Policies go in `/etc/brave/policies/managed/`. x86_64-linux and aarch64-linux. MPL-2.0.
 
 Each package is exposed on its own — installing or building one never pulls in the others.
@@ -465,6 +465,12 @@ flake registry entry. On NixOS that's your system's own pinned nixpkgs, so nti's
 are the same versions your config would install, and download from the cache. Anything
 `nti drop`ped stays in `/nix/store` until the next garbage collection (`nti clean` does it
 now, and so does NixOS's automatic cleanup if you have it on).
+
+**Updating:** `nti sync` (or `s` in the menu) also updates, and says what changed
+(`Updated: ripgrep 15.1.0 → 15.2.0`). On NixOS, nti's packages follow your system's
+nixpkgs, so they update after you update your system and sync. Elsewhere, `nixpkgs` means
+the latest nixpkgs-unstable, so every sync picks up new versions (Nix checks for one at most
+once an hour).
 
 **Unfree packages** need `{ allowUnfree = true; }` in `~/.config/nixpkgs/config.nix`;
 nti says so if you try one.
