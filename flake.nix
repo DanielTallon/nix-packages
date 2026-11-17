@@ -46,6 +46,7 @@
             '';
             flow-desktop = pkgs.callPackage ./flow-desktop/flow-desktop.nix { };
             photo2scan = pkgs.callPackage ./photo2scan/photo2scan.nix { };
+            nti = pkgs.callPackage ./nti/nti.nix { };
         } // nixpkgs.lib.optionalAttrs (builtins.elem system [ "x86_64-linux" "aarch64-linux" ]) {
             # Brave Origin, from Brave's .deb. Kept current by update-brave-origin.yml.
             brave-origin = pkgs.callPackage ./brave-origin/brave-origin.nix { };
@@ -77,6 +78,7 @@
         wallpaperpicker = final.callPackage ./wallpaperpicker/wallpaperpicker.nix { };
         flow-desktop = final.callPackage ./flow-desktop/flow-desktop.nix { };
         photo2scan = final.callPackage ./photo2scan/photo2scan.nix { };
+        nti = final.callPackage ./nti/nti.nix { };
         brave-origin = final.callPackage ./brave-origin/brave-origin.nix { };
         proton-wineland = final.callPackage ./proton-wineland/proton-wineland.nix { };
         proton-wineland-x86_64 = final.callPackage ./proton-wineland/proton-wineland.nix { variant = "x86_64"; };
