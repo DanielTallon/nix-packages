@@ -1,0 +1,38 @@
+warning: creating lock file "/home/fredrick/Develop/nix-packages/nixed-error/tests/.work/build-failure--override/flake.lock": 
+• Added input 'nixpkgs':
+    'https://releases.nixos.org/nixpkgs/nixpkgs-26.11pre1088030.8edc0c72e3a3/nixexprs.tar.zst?narHash=sha256-6BIvCXtdLW4HQwsOGkgH444aB3vCbHypE9TA78ireh8%3D' (2026-10-08)
+this derivation will be built:
+  /nix/store/yp1lfiz36ybii8r68fbpz843i7kci5mh-hello-2.12.3.drv
+building '/nix/store/yp1lfiz36ybii8r68fbpz843i7kci5mh-hello-2.12.3.drv'...
+error: Cannot build '/nix/store/yp1lfiz36ybii8r68fbpz843i7kci5mh-hello-2.12.3.drv'.
+       Reason: builder failed with exit code 1.
+       Output paths:
+         /nix/store/q6s9mycrg8l49kf8xps1mh6nf1cqbas5-hello-2.12.3
+       Last 25 log lines:
+       > if test "hello" = "gettext-tools"; then \
+       >   /nix/store/2gfxiwls9hbgwdwcy43mprchwsq36mg6-coreutils-9.11/bin/mkdir -p /nix/store/q6s9mycrg8l49kf8xps1mh6nf1cqbas5-hello-2.12.3/share/gettext/po; \
+       >   for file in Makefile.in.in remove-potcdate.sin quot.sed boldquot.sed en@quot.header en@boldquot.header insert-header.sin Rules-quot   Makevars.template; do \
+       >     /nix/store/2gfxiwls9hbgwdwcy43mprchwsq36mg6-coreutils-9.11/bin/install -c -m 644 ./$file \
+       >                    /nix/store/q6s9mycrg8l49kf8xps1mh6nf1cqbas5-hello-2.12.3/share/gettext/po/$file; \
+       >   done; \
+       >   for file in Makevars; do \
+       >     rm -f /nix/store/q6s9mycrg8l49kf8xps1mh6nf1cqbas5-hello-2.12.3/share/gettext/po/$file; \
+       >   done; \
+       > else \
+       >   : ; \
+       > fi
+       > make[2]: Leaving directory '/build/hello-2.12.3/po'
+       > make[2]: Entering directory '/build/hello-2.12.3'
+       > make[3]: Entering directory '/build/hello-2.12.3'
+       >  /nix/store/2gfxiwls9hbgwdwcy43mprchwsq36mg6-coreutils-9.11/bin/mkdir -p '/nix/store/q6s9mycrg8l49kf8xps1mh6nf1cqbas5-hello-2.12.3/bin'
+       >  /nix/store/2gfxiwls9hbgwdwcy43mprchwsq36mg6-coreutils-9.11/bin/mkdir -p '/nix/store/q6s9mycrg8l49kf8xps1mh6nf1cqbas5-hello-2.12.3/share/man/man1'
+       >  /nix/store/2gfxiwls9hbgwdwcy43mprchwsq36mg6-coreutils-9.11/bin/mkdir -p '/nix/store/q6s9mycrg8l49kf8xps1mh6nf1cqbas5-hello-2.12.3/share/info'
+       >   /nix/store/2gfxiwls9hbgwdwcy43mprchwsq36mg6-coreutils-9.11/bin/install -c hello '/nix/store/q6s9mycrg8l49kf8xps1mh6nf1cqbas5-hello-2.12.3/bin'
+       >  /nix/store/2gfxiwls9hbgwdwcy43mprchwsq36mg6-coreutils-9.11/bin/install -c -m 644 hello.1 '/nix/store/q6s9mycrg8l49kf8xps1mh6nf1cqbas5-hello-2.12.3/share/man/man1'
+       >  /nix/store/2gfxiwls9hbgwdwcy43mprchwsq36mg6-coreutils-9.11/bin/install -c -m 644 ./doc/hello.info '/nix/store/q6s9mycrg8l49kf8xps1mh6nf1cqbas5-hello-2.12.3/share/info'
+       > make[3]: Leaving directory '/build/hello-2.12.3'
+       > make[2]: Leaving directory '/build/hello-2.12.3'
+       > make[1]: Leaving directory '/build/hello-2.12.3'
+       > nixed-error test: failing on purpose
+       For full logs, run:
+         nix log /nix/store/yp1lfiz36ybii8r68fbpz843i7kci5mh-hello-2.12.3.drv

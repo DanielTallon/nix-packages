@@ -1,0 +1,425 @@
+warning: creating lock file "/home/fredrick/Develop/nix-packages/nixed-error/tests/.work/option-wrong-type--enum-case/flake.lock": 
+• Added input 'nixpkgs':
+    'https://releases.nixos.org/nixpkgs/nixpkgs-26.11pre1092129.319e4cebef10/nixexprs.tar.zst?narHash=sha256-UwKRZKua8BOagYl0cou05BHtu7F6XV62FD2Hb%2Bf0QYs%3D' (2026-10-14)
+error:
+       … while calling the 'derivationStrict' builtin
+         at «nix-internal»/derivation-internal.nix:37:12:
+           36|
+           37|   strict = derivationStrict drvAttrs;
+             |            ^
+           38|
+
+       … while evaluating derivation 'nixos-system-nixos-26.11.20261014.319e4ce'
+         whose name attribute is located at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/pkgs/stdenv/generic/make-derivation.nix:651:11
+
+       … while evaluating attribute 'buildCommand' of derivation 'nixos-system-nixos-26.11.20261014.319e4ce'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/nixos/modules/system/activation/top-level.nix:63:7:
+           62|       allowSubstitutes = false;
+           63|       buildCommand = systemBuilder;
+             |       ^
+           64|
+
+       … while calling the 'getAttr' builtin
+         at «nix-internal»/derivation-internal.nix:50:17:
+           49|     value = commonAttrs // {
+           50|       outPath = builtins.getAttr outputName strict;
+             |                 ^
+           51|       drvPath = strict.drvPath;
+
+       … while calling the 'derivationStrict' builtin
+         at «nix-internal»/derivation-internal.nix:37:12:
+           36|
+           37|   strict = derivationStrict drvAttrs;
+             |            ^
+           38|
+
+       … while evaluating derivation 'etc'
+         whose name attribute is located at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/pkgs/stdenv/generic/make-derivation.nix:651:11
+
+       … while evaluating attribute 'buildCommand' of derivation 'etc'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/pkgs/build-support/trivial-builders/default.nix:88:9:
+           87|         inherit name;
+           88|         buildCommand = lib.toFunction buildCommand finalAttrs;
+             |         ^
+           89|         passAsFile = defaultPassAsFile ++ (userAttrs.passAsFile or [ ]);
+
+       … from call site
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/pkgs/build-support/trivial-builders/default.nix:88:24:
+           87|         inherit name;
+           88|         buildCommand = lib.toFunction buildCommand finalAttrs;
+             |                        ^
+           89|         passAsFile = defaultPassAsFile ++ (userAttrs.passAsFile or [ ]);
+
+       … while calling 'toFunction'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/trivial.nix:1211:16:
+         1210|   */
+         1211|   toFunction = v: if isFunction v then v else k: v;
+             |                ^
+         1212|
+
+       … while evaluating a branch condition
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/trivial.nix:1211:19:
+         1210|   */
+         1211|   toFunction = v: if isFunction v then v else k: v;
+             |                   ^
+         1212|
+
+       … from call site
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/trivial.nix:1211:22:
+         1210|   */
+         1211|   toFunction = v: if isFunction v then v else k: v;
+             |                      ^
+         1212|
+
+       … while calling anonymous lambda
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/trivial.nix:1131:5:
+         1130|     in
+         1131|     f: isFunction f || (f ? __functor && isFunction f.__functor && isFunction (f.__functor f));
+             |     ^
+         1132|
+
+       … in the left operand of the OR (||) operator
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/trivial.nix:1131:21:
+         1130|     in
+         1131|     f: isFunction f || (f ? __functor && isFunction f.__functor && isFunction (f.__functor f));
+             |                     ^
+         1132|
+
+       … while calling the 'isFunction' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/trivial.nix:1131:8:
+         1130|     in
+         1131|     f: isFunction f || (f ? __functor && isFunction f.__functor && isFunction (f.__functor f));
+             |        ^
+         1132|
+
+       … from call site
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/nixos/modules/system/etc/etc.nix:56:11:
+           55|         mkdir -p "$out/etc"
+           56|         ${lib.concatMapStringsSep "\n" (
+             |           ^
+           57|           etcEntry:
+
+       … while calling 'concatMapStringsSep'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/strings.nix:261:13:
+          260|   concatMapStringsSep =
+          261|     sep: f: list:
+             |             ^
+          262|     concatStringsSep sep (map f list);
+
+       … while calling the 'concatStringsSep' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/strings.nix:262:5:
+          261|     sep: f: list:
+          262|     concatStringsSep sep (map f list);
+             |     ^
+          263|
+
+       … while calling anonymous lambda
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/nixos/modules/system/etc/etc.nix:57:11:
+           56|         ${lib.concatMapStringsSep "\n" (
+           57|           etcEntry:
+             |           ^
+           58|           lib.escapeShellArgs [
+
+       … from call site
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/nixos/modules/system/etc/etc.nix:58:11:
+           57|           etcEntry:
+           58|           lib.escapeShellArgs [
+             |           ^
+           59|             "makeEtcEntry"
+
+       … while calling 'concatMapStringsSep'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/strings.nix:261:13:
+          260|   concatMapStringsSep =
+          261|     sep: f: list:
+             |             ^
+          262|     concatStringsSep sep (map f list);
+
+       … while calling the 'concatStringsSep' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/strings.nix:262:5:
+          261|     sep: f: list:
+          262|     concatStringsSep sep (map f list);
+             |     ^
+          263|
+
+       … while calling 'escapeShellArg'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/strings.nix:1220:5:
+         1219|   escapeShellArg =
+         1220|     arg:
+             |     ^
+         1221|     let
+
+       … while evaluating a branch condition
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/strings.nix:1231:5:
+         1230|     in
+         1231|     if match "[[:alnum:],._+:@%/-]+" string == null then
+             |     ^
+         1232|       "'${replaceString "'" "'\\''" string}'"
+
+       … while calling the 'match' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/strings.nix:1231:8:
+         1230|     in
+         1231|     if match "[[:alnum:],._+:@%/-]+" string == null then
+             |        ^
+         1232|       "'${replaceString "'" "'\\''" string}'"
+
+       … while evaluating the second argument passed to builtins.match
+
+       … while evaluating a branch condition
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/strings.nix:1229:9:
+         1228|         # dependency on the entire original source.
+         1229|         if isPath arg && !isStorePath arg then "${arg}" else toString arg;
+             |         ^
+         1230|     in
+
+       … in the left operand of the AND (&&) operator
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/strings.nix:1229:23:
+         1228|         # dependency on the entire original source.
+         1229|         if isPath arg && !isStorePath arg then "${arg}" else toString arg;
+             |                       ^
+         1230|     in
+
+       … while calling the 'isPath' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/strings.nix:1229:12:
+         1228|         # dependency on the entire original source.
+         1229|         if isPath arg && !isStorePath arg then "${arg}" else toString arg;
+             |            ^
+         1230|     in
+
+       … from call site
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/nixos/modules/system/etc/etc.nix:61:16:
+           60|             # Force local source paths to be added to the store
+           61|             "${etcEntry.source}"
+             |                ^
+           62|             etcEntry.target
+
+       … while calling anonymous lambda
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:283:38:
+          282|             let
+          283|               recurse = mapAttrs (n: v: if isOption v then v.value else recurse v);
+             |                                      ^
+          284|             in
+
+       … while evaluating the attribute 'value'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1181:7:
+         1180|     // {
+         1181|       value = addErrorContext "while evaluating the option `${showOption loc}':" (
+             |       ^
+         1182|         # Apply the 'apply' function to the merged value. This allows options to
+
+       … while evaluating the option `environment.etc.case.source':
+
+       … while evaluating the attribute 'mergedValue'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1276:5:
+         1275|     # Type-check the remaining definitions, and merge them. Or throw if no definitions.
+         1276|     mergedValue =
+             |     ^
+         1277|       if isDefined then
+
+       … while evaluating a branch condition
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1277:7:
+         1276|     mergedValue =
+         1277|       if isDefined then
+             |       ^
+         1278|         if type.merge ? v2 then
+
+       … while evaluating the attribute 'values'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1270:11:
+         1269|         {
+         1270|           values = defsSorted;
+             |           ^
+         1271|           inherit (defsFiltered) highestPrio;
+
+       … while evaluating a branch condition
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1264:13:
+         1263|             # Avoid sorting if we don't have to.
+         1264|             if any (def: def.value._type or "" == "order") defsFiltered.values then
+             |             ^
+         1265|               sortProperties defsFiltered.values
+
+       … while calling the 'any' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1264:16:
+         1263|             # Avoid sorting if we don't have to.
+         1264|             if any (def: def.value._type or "" == "order") defsFiltered.values then
+             |                ^
+         1265|               sortProperties defsFiltered.values
+
+       … from call site
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1259:26:
+         1258|           # Process mkOverride properties.
+         1259|           defsFiltered = filterOverrides' defsNormalized;
+             |                          ^
+         1260|
+
+       … while calling anonymous lambda
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1460:5:
+         1459|     in
+         1460|     defs:
+             |     ^
+         1461|     # Optimize for the singleton case, equivalent to the `else` clause.
+
+       … while evaluating a branch condition
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1462:5:
+         1461|     # Optimize for the singleton case, equivalent to the `else` clause.
+         1462|     if length defs == 1 then
+             |     ^
+         1463|       {
+
+       … while calling the 'length' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1462:8:
+         1461|     # Optimize for the singleton case, equivalent to the `else` clause.
+         1462|     if length defs == 1 then
+             |        ^
+         1463|       {
+
+       … while calling the 'concatMap' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1244:28:
+         1243|           # Process mkMerge and mkIf properties.
+         1244|           defsNormalized = concatMap (
+             |                            ^
+         1245|             m:
+
+       … while calling anonymous lambda
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1245:13:
+         1244|           defsNormalized = concatMap (
+         1245|             m:
+             |             ^
+         1246|             map (
+
+       … while calling the 'map' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1246:13:
+         1245|             m:
+         1246|             map (
+             |             ^
+         1247|               value:
+
+       … while evaluating definitions from `/nix/store/164ab099jmzsacq8pry7sfp7ggnmr60b-source/nixos/modules/system/etc/etc.nix':
+
+       … from call site
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1255:82:
+         1254|                 }
+         1255|             ) (addErrorContext "while evaluating definitions from `${m.file}':" (dischargeProperties m.value))
+             |                                                                                  ^
+         1256|           ) defs;
+
+       … while calling 'dischargeProperties'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1411:5:
+         1410|   dischargeProperties =
+         1411|     def:
+             |     ^
+         1412|     if def ? _type then
+
+       … while evaluating a branch condition
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1414:9:
+         1413|       if def._type == "if" then
+         1414|         if isBool def.condition then
+             |         ^
+         1415|           if def.condition then dischargeProperties def.content else [ ]
+
+       … while calling the 'isBool' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1414:12:
+         1413|       if def._type == "if" then
+         1414|         if isBool def.condition then
+             |            ^
+         1415|           if def.condition then dischargeProperties def.content else [ ]
+
+       … while evaluating the attribute 'condition'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1581:13:
+         1580|     _type = "if";
+         1581|     inherit condition content;
+             |             ^
+         1582|   };
+
+       … from call site
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/nixos/modules/system/etc/etc.nix:239:36:
+          238|                 target = lib.mkDefault name;
+          239|                 source = lib.mkIf (config.text != null) (
+             |                                    ^
+          240|                   let
+
+       … while calling anonymous lambda
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:283:38:
+          282|             let
+          283|               recurse = mapAttrs (n: v: if isOption v then v.value else recurse v);
+             |                                      ^
+          284|             in
+
+       … while evaluating the attribute 'value'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1181:7:
+         1180|     // {
+         1181|       value = addErrorContext "while evaluating the option `${showOption loc}':" (
+             |       ^
+         1182|         # Apply the 'apply' function to the merged value. This allows options to
+
+       … while evaluating the option `environment.etc.case.text':
+
+       (12 duplicate frames omitted)
+
+       … while evaluating definitions from `/nix/store/ffazpw0bw45w72ccwy2v322h3dhlnlax-source/hosts/case.nix':
+
+       … from call site
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1255:82:
+         1254|                 }
+         1255|             ) (addErrorContext "while evaluating definitions from `${m.file}':" (dischargeProperties m.value))
+             |                                                                                  ^
+         1256|           ) defs;
+
+       … while calling 'dischargeProperties'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1411:5:
+         1410|   dischargeProperties =
+         1411|     def:
+             |     ^
+         1412|     if def ? _type then
+
+       … while evaluating a branch condition
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1412:5:
+         1411|     def:
+         1412|     if def ? _type then
+             |     ^
+         1413|       if def._type == "if" then
+
+       … while evaluating the attribute 'value'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:866:21:
+          865|             inherit (module) file;
+          866|             inherit value;
+             |                     ^
+          867|           }) module.config
+
+       … from call site
+         at /home/fredrick/Develop/nix-packages/nixed-error/tests/.work/option-wrong-type--enum-case/hosts/case.nix:12:38:
+           11|   options.kernelProvider = lib.mkOption { type = lib.types.enum [ "xddxdd" "chaotic" "latest" "lts" "zen" "xanmod" ]; };
+           12|   config.environment.etc.case.text = config.kernelProvider;
+             |                                      ^
+           13| }
+
+       … while calling anonymous lambda
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:283:38:
+          282|             let
+          283|               recurse = mapAttrs (n: v: if isOption v then v.value else recurse v);
+             |                                      ^
+          284|             in
+
+       … while evaluating the attribute 'value'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1181:7:
+         1180|     // {
+         1181|       value = addErrorContext "while evaluating the option `${showOption loc}':" (
+             |       ^
+         1182|         # Apply the 'apply' function to the merged value. This allows options to
+
+       … while evaluating the option `kernelProvider':
+
+       … while evaluating the attribute 'mergedValue'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1276:5:
+         1275|     # Type-check the remaining definitions, and merge them. Or throw if no definitions.
+         1276|     mergedValue =
+             |     ^
+         1277|       if isDefined then
+
+       … while calling the 'throw' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1291:11:
+         1290|           in
+         1291|           throw "A definition for option `${showOption loc}' is not of type `${type.description}'. Definition values:${showDefs allInvalid}"
+             |           ^
+         1292|       else if type.emptyValue ? value then
+
+       error: A definition for option `kernelProvider' is not of type `one of "xddxdd", "chaotic", "latest", "lts", "zen", "xanmod"'. Definition values:
+       - In `/nix/store/ffazpw0bw45w72ccwy2v322h3dhlnlax-source/hosts/case.nix': "LTS"

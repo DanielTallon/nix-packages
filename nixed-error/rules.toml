@@ -1,0 +1,690 @@
+# nixed-error rules
+#
+# Each [[rule]] recognises one kind of Nix error. When several rules match, the highest
+# `priority` wins. Your own rules go in ~/.config/nixed-error/rules.toml with the same format;
+# a rule there with the same `id` replaces the built-in one.
+#
+#   id        unique name
+#   title     one-line headline
+#   match     regex (Python syntax) run against each `error:` block. Named groups like
+#             (?P<name>...) become {{name}} in the texts below.
+#   priority  0-100, default 50
+#   blame     you | upstream | system | auto (auto = decide from where the error points)
+#   explain   what happened, in plain words
+#   fix       what to do about it
+#   locate    list of texts to search for in your .nix files to find the exact line (first hit wins;
+#             a text naming a {{var}} that isn't set is skipped)
+#   locate_regex  true = the locate texts are regexes; {{vars}} are inserted escaped
+#   requires  regex that must also appear somewhere in the output (e.g. in trace context)
+#   handler   built-in detective work: semicolon | brackets | build | missing_module | ...
+#   scope     error (default) | log (only for build logs) | both
+#
+# Available in texts: every named group, plus {{file}}, {{line}}, {{input}}, {{note}},
+# {{opt_last}} (last part of an option name) and {{pname}} (package name without version).
+# Write regexes in '''literal strings''' so backslashes and quotes need no escaping.
+
+# ─── syntax ──────────────────────────────────────────────────────────────────
+
+[[rule]]
+id = "missing-semicolon"
+title = "Missing semicolon"
+match = '''syntax error, unexpected (?!end of file|'[\]})]').+, expecting ';'$'''
+priority = 90
+blame = "you"
+handler = "semicolon"
+explain = """
+Line {{fix_line}} of {{file}} needs a `;` at the end. Every `name = value` inside { } must end with one.
+
+{{note}}
+"""
+fix = "Add `;` at the end of line {{fix_line}}."
+
+[[rule]]
+id = "missing-opener"
+title = "Missing opening bracket"
+match = '''syntax error, unexpected '(?P<got>[\]})])''''
+priority = 91
+blame = "you"
+handler = "stray_closer"
+explain = """
+{{explain_text}}
+
+{{note}}
+"""
+fix = "{{fix_text}}"
+
+[[rule]]
+id = "missing-closer"
+title = "Missing closing bracket"
+match = '''syntax error, unexpected ';''''
+priority = 85
+blame = "you"
+handler = "semicolon_inside"
+explain = "{{explain_text}}"
+fix = "{{fix_text}}"
+
+[[rule]]
+id = "duplicate-attribute"
+title = "Same setting written twice"
+# Nix's own position is the repeat; the handler reads the first one from "already defined at <file>:<line>:<col>"
+match = '''attribute '(?P<name>[^']+)' already defined at'''
+priority = 85
+blame = "you"
+handler = "duplicate_attr"
+explain = """
+{{explain_text}}
+
+{{note}}
+"""
+fix = "{{fix_text}}"
+
+[[rule]]
+id = "setting-in-list"
+title = "Setting inside a list"
+match = '''syntax error, unexpected '='$'''
+priority = 86
+blame = "you"
+handler = "equals_inside"
+explain = """
+{{explain_text}}
+
+{{note}}
+"""
+fix = "{{fix_text}}"
+
+[[rule]]
+id = "value-without-name"
+title = "Value outside its list"
+match = '''syntax error, unexpected [^\n]*, expecting '\.' or '=''''
+priority = 86
+blame = "you"
+handler = "bare_word"
+explain = """
+{{explain_text}}
+
+{{note}}
+"""
+fix = "{{fix_text}}"
+
+[[rule]]
+id = "list-comma"
+title = "Comma in a list"
+match = '''syntax error, unexpected ','(?!.*expecting '[;}]')'''
+priority = 85
+blame = "you"
+handler = "brackets"
+explain = """
+Nix lists are separated by spaces, not commas: `[ pkgs.git pkgs.vim ]`, not `[ pkgs.git, pkgs.vim ]`.
+Commas only belong in function arguments like `{ pkgs, lib, ... }:`.
+
+{{note}}
+"""
+fix = "Remove the comma(s) on line {{line}} and separate the items with spaces."
+
+[[rule]]
+id = "unexpected-eof"
+title = "Something is never closed"
+match = '''syntax error, unexpected end of file'''
+priority = 90
+blame = "you"
+handler = "brackets"
+explain = """
+Nix reached the end of {{file}} while something was still open: a `{`, `[`, `(` or a string.
+
+{{note}}
+"""
+fix = "Add the missing closing bracket or quote. Nix's own line number points at the end of the file, which is rarely where it belongs."
+
+[[rule]]
+id = "syntax-error"
+title = "Syntax error"
+match = '''syntax error, unexpected (?P<got>[^\n]+?)(?:, expecting (?P<want>[^\n]+))?$'''
+priority = 80
+blame = "you"
+handler = "brackets"
+explain = """
+Nix couldn't read {{file}} near line {{line}}: it found {{got}} where it didn't make sense.
+Common causes: a missing `;` on the line before, an extra or missing `}` / `]`, or `=` used inside a list.
+
+{{note}}
+"""
+fix = "Look at line {{line}} and the line just above it."
+
+# ─── names that don't exist ──────────────────────────────────────────────────
+
+[[rule]]
+id = "undefined-module-arg"
+title = "Module is missing an argument"
+match = '''undefined variable '(?P<name>pkgs|lib|config|options|modulesPath|inputs|specialArgs|osConfig)\''''
+priority = 75
+blame = "you"
+handler = "module_arg"
+explain = """
+{{file}} uses `{{name}}`, but the module doesn't ask for it. A module only gets the arguments listed
+on its first line.
+
+{{note}}
+"""
+fix = """
+Change the first line of {{file}} to:
+    {{header_new}}
+"""
+
+[[rule]]
+id = "undefined-variable"
+title = "Unknown name"
+match = '''undefined variable '(?P<name>[^']+)\''''
+priority = 70
+blame = "you"
+handler = "unknown_name"
+explain = """
+`{{name}}` isn't defined anywhere Nix can see from line {{line}}.
+
+{{note}}
+"""
+fix = "{{fix_text}}"
+
+[[rule]]
+id = "attribute-missing"
+title = "Name not found"
+match = '''attribute '(?P<name>[^']+)' missing'''
+priority = 70
+explain = """
+Something tried to use `{{name}}`, but it doesn't exist there. If it's a package: it's misspelled, it was
+renamed or removed in your version of nixpkgs, or it lives under a sub-set (like `pkgs.kdePackages.{{name}}`).
+"""
+fix = "Check the spelling. Search for the right name with `nix search nixpkgs {{name}}` or on search.nixos.org."
+
+[[rule]]
+id = "missing-module"
+title = "Module isn't defined anywhere"
+# flake-parts style: `config.flake.modules.nixos.foo` (or self.modules / nixosModules) where nothing sets foo.
+# Nix's code snippet must show the name under such a path, or it's an ordinary missing attribute.
+match = '''attribute '(?P<name>[^']+)' missing\n\s*at [^\n]+\n(?:[^\n]*\n)*?\s*\d+\|[^\n]*?\b(?P<prefix>(?:flake|self)\.modules\.(?P<class>[\w-]+)|(?P<class2>nixos|home|homeManager|darwin)Modules)\.(?P=name)\b'''
+priority = 75
+blame = "you"
+handler = "missing_module"
+explain = """
+{{explain_text}}
+
+{{note}}
+"""
+fix = "{{fix_text}}"
+
+[[rule]]
+id = "package-renamed-or-removed"
+title = "Package or option was renamed or removed"
+# "The ‘gnome.gedit’ alias was removed": the name is the quoted word, not "alias"
+match = '''(?P<msg>(?:The )?[‘'`"]?(?P<name>[\w.+-]+)[’'`"]?(?: (?:alias|package|attribute))? (?:has been|was) (?:removed|renamed|replaced|dropped|moved)[^\n]*)'''
+priority = 75
+blame = "you"
+# a real use (pkgs.foo, or programs.foo when its `package` option failed) beats the name as a bare word;
+# the bare word must not be part of a longer name (flake.modules.nixos.foo, foo.nix, foo-bar)
+locate = [
+  '''pkgs\.{{name}}(?![\w-])''',
+  '''(?<![\w.-]){{pkg_option}}(?![\w-])''',
+  '''(?<![\w.-]){{name}}(?![\w.-])''',
+]
+locate_regex = true
+# the handler writes the texts: a module (programs.foo) needs different advice from a plain pkgs.foo
+handler = "removed_pkg"
+explain = "{{explain_text}}"
+fix = "{{fix_text}}"
+
+# ─── NixOS options (the module system) ───────────────────────────────────────
+
+[[rule]]
+id = "option-not-exist"
+title = "That option doesn't exist"
+match = '''The option `(?P<option>[^']+)' does not exist'''
+priority = 80
+blame = "you"
+locate = ["{{opt_tail2}}", "{{opt_last}}"]
+explain = """
+NixOS has no option called `{{option}}`. It may be misspelled, or renamed or removed in your NixOS
+version. Or it belongs to a module you haven't imported: a common case is a home-manager option in a
+NixOS config, or the reverse.
+"""
+fix = "Fix the name on line {{line}}. Look it up on search.nixos.org/options, or with `man configuration.nix`."
+
+[[rule]]
+id = "option-removed"
+title = "Option was removed from NixOS"
+match = '''The option definition `(?P<option>[^']+)' in `[^']+' no longer has any effect; please remove it\.(?P<why>[^\n]*(?:\n\s+[^-\s][^\n]*)*)'''
+priority = 85
+blame = "you"
+locate = ["{{opt_tail2}}", "{{opt_last}}"]
+explain = """
+`{{option}}` used to exist but was removed in this NixOS version. NixOS's reason:
+{{why}}
+"""
+fix = "Delete the `{{option}}` line in {{file}} (and add its replacement if the reason mentions one)."
+
+[[rule]]
+id = "option-renamed"
+title = "Option was renamed"
+match = '''The option `(?P<option>[^']+)' (?:defined in `[^']+' )?has been renamed to `(?P<new>[^']+)'\.?'''
+priority = 85
+blame = "you"
+locate = ["{{opt_tail2}}", "{{opt_last}}"]
+explain = "`{{option}}` is now called `{{new}}`."
+fix = "Rename it to `{{new}}` in {{file}}."
+
+[[rule]]
+id = "option-wrong-type"
+title = "Wrong kind of value for an option"
+match = '''A definition for option `(?P<option>[^']+)' is not of type `(?P<type>[^\n]+?)'\. Definition values:'''
+priority = 80
+blame = "you"
+locate = ["{{opt_tail2}}", "{{opt_last}}"]
+handler = "option_type"
+explain = """
+{{explain_text}}
+
+{{note}}
+"""
+fix = "{{fix_text}}"
+
+[[rule]]
+id = "option-conflict"
+title = "Option is set to two different values"
+match = '''The option `(?P<option>[^']+)' (?:has conflicting definition values|is defined multiple times)'''
+priority = 80
+blame = "you"
+locate = ["{{opt_tail2}}", "{{opt_last}}"]
+explain = """
+`{{option}}` is set in more than one place with different values, and it can only have one:
+{{definitions}}
+"""
+fix = "Remove one of them, or force yours to win: `{{option}} = lib.mkForce <value>;`"
+
+[[rule]]
+id = "option-no-value"
+title = "A required option isn't set"
+match = '''The option `(?P<option>[^']+)' (?:is used but not defined|was accessed but has no value defined)'''
+priority = 80
+blame = "you"
+locate = ["{{opt_tail2}}", "{{opt_parent}}"]
+explain = "Something needs `{{option}}`, but nothing sets it, and it has no default."
+fix = "Set `{{option}} = ...;` in your config."
+
+[[rule]]
+id = "failed-assertion"
+title = "A module refused your config"
+match = '''Failed assertions:\s*\n(?P<list>(?:\s*- [^\n]*\n?(?:\s{3,}[^-\s][^\n]*\n?)*)+)'''
+priority = 60
+blame = "you"
+handler = "assertion"
+explain = """
+A NixOS module checked your settings and found a combination that can't work. Its message is
+usually exact:
+{{list}}
+"""
+fix = "Do what the message above asks. The line shown is where one of the options it names is set."
+
+[[rule]]
+id = "infinite-recursion-imports"
+title = "Infinite recursion: `config` used inside `imports`"
+match = '''infinite recursion encountered'''
+requires = '''you probably reference `config` in `imports`'''
+priority = 80
+blame = "you"
+explain = """
+`imports` is decided before `config` exists, so `imports` can't depend on `config`
+(e.g. `imports = lib.optional config.foo.enable ./bar.nix;`).
+"""
+fix = "Import the file unconditionally and put `lib.mkIf config.foo.enable { ... }` inside it instead."
+
+[[rule]]
+id = "infinite-recursion"
+title = "Infinite recursion"
+match = '''infinite recursion encountered'''
+priority = 70
+blame = "you"
+explain = """
+Something in your config depends on itself. Common causes: using `config.x` to define `x`, using
+`pkgs` inside `nixpkgs.overlays`/`nixpkgs.config`, or `rec { a = a; }`. The place shown is the last of your
+files Nix passed through, which is a good place to start.
+"""
+fix = "Look for a value that (indirectly) refers to itself around line {{line}}."
+
+# ─── packages that refuse to evaluate ────────────────────────────────────────
+
+[[rule]]
+id = "unfree"
+title = "Package is unfree and not allowed"
+match = '''(?:Refusing to evaluate package|Package) [‘'](?P<pkg>[^’']+)[’'][^\n]*(?:because it has an unfree license|has an unfree license)'''
+priority = 85
+blame = "you"
+# the handler finds what pulls the package in (pkgs.foo, or a driver/module like videoDrivers = [ "nvidia" ])
+# and an `allowUnfree = false` or `allowUnfreePredicate` that blocks it
+handler = "unfree"
+explain = "{{explain_text}}"
+fix = "{{fix_text}}"
+
+[[rule]]
+id = "insecure"
+title = "Package is marked insecure"
+match = '''(?:Refusing to evaluate package|Package) [‘'](?P<pkg>[^’']+)[’'][^\n]*is marked as insecure'''
+priority = 85
+blame = "upstream"
+# the handler quotes nixpkgs' "Known issues" (e.g. "discontinued upstream"), finds what pulls the package in
+# (you if your files name it, else a dependency), and says the permit is tied to this exact version
+handler = "insecure"
+explain = "{{explain_text}}"
+fix = "{{fix_text}}"
+
+[[rule]]
+id = "broken"
+title = "Package is marked broken"
+# "is marked as broken" in older nixpkgs; now a "has problems:" list with a "- broken:" entry
+match = '''(?:Refusing to evaluate package|Package) [‘'](?P<pkg>[^’']+)[’'][^\n]*(?:is marked as broken|because it has problems:\n(?:[ \t]*- .*\n)*?[ \t]*- broken:)'''
+priority = 85
+blame = "upstream"
+# the handler quotes the package's `broken = …` condition, follows Nix's trace from the broken package to the
+# package your files name (mcp-nixos > fastmcp > fastmcp-slim), and offers the nixpkgs from before your last update
+handler = "broken"
+explain = "{{explain_text}}"
+fix = "{{fix_text}}"
+
+[[rule]]
+id = "unsupported-platform"
+title = "Package isn't available on this system"
+match = '''Package [‘'](?P<pkg>[^’']+)[’'][^\n]*is not available on the requested hostPlatform'''
+priority = 85
+blame = "you"
+locate = ["{{pname}}"]
+explain = "`{{pkg}}` doesn't support your CPU/OS (for example it's x86-only, or macOS-only)."
+fix = "Remove it or use an alternative."
+
+# ─── flakes & files ──────────────────────────────────────────────────────────
+
+[[rule]]
+id = "untracked-file"
+title = "New file isn't added to git"
+match = '''Path '(?P<path>[^']+)' in the repository "(?P<repo>[^"]+)" is not tracked by Git'''
+priority = 95
+blame = "you"
+explain = """
+Flakes only see files git knows about. `{{path}}` exists, but you never ran `git add` on it,
+so to Nix it doesn't exist.
+"""
+fix = """
+    git -C {{repo}} add {{path}}
+(It doesn't have to be committed, just added.)
+"""
+
+[[rule]]
+id = "file-missing-in-flake"
+title = "File not found (probably not added to git)"
+match = '''getting status of '/nix/store/[^']+?-source/(?P<path>[^']+)': No such file or directory'''
+priority = 85
+blame = "you"
+explain = "Nix can't find `{{path}}` in your flake. Either the path is misspelled, or the file is new and not `git add`-ed yet (flakes ignore untracked files)."
+fix = "Check the path, then `git add {{path}}` in your flake folder."
+
+[[rule]]
+id = "path-not-exist"
+title = "File or folder doesn't exist"
+match = '''path '(?P<path>[^']+)' does not exist'''
+priority = 70
+blame = "you"
+explain = "Your config refers to `{{path}}`, which doesn't exist. Check for a typo, a wrong relative path (`./` is relative to the file it's written in), or a file not yet added to git."
+fix = "Fix the path on line {{line}}."
+
+[[rule]]
+id = "host-not-in-flake"
+title = "No configuration with that name in your flake"
+match = '''flake '(?P<flake>[^']+)' does not provide attribute '(?P<attr>[^']+)'(?P<rest>[^\n]*)'''
+priority = 90
+blame = "you"
+explain = """
+Your flake has no `{{attr}}`. For NixOS this usually means the name under `nixosConfigurations.<name>`
+in flake.nix doesn't match your hostname (or what NH_OS_FLAKE / --hostname says).
+"""
+fix = "Make the name in flake.nix match `hostname`, or pass it explicitly: `nh os switch -H <name>`."
+
+[[rule]]
+id = "lock-file-needs-update"
+title = "flake.lock needs to change"
+match = '''(?:requires lock file changes but they're not allowed|cannot write modified lock file)'''
+priority = 80
+blame = "you"
+explain = "You added or changed an input in flake.nix, but flake.lock can't be updated in this mode."
+fix = "Run `nix flake lock` (or `nix flake update <input>`) in your flake folder."
+
+[[rule]]
+id = "experimental-feature"
+title = "Flakes / nix-command not enabled"
+match = '''experimental Nix feature '(?P<feature>[^']+)' is disabled'''
+priority = 90
+blame = "system"
+explain = "The `{{feature}}` feature is off in this Nix."
+fix = "Add `nix.settings.experimental-features = [ \"nix-command\" \"flakes\" ];` to your config."
+
+# ─── type errors in Nix code ─────────────────────────────────────────────────
+
+[[rule]]
+id = "wrong-type"
+title = "Wrong kind of value"
+match = '''(?:expected a (?P<want>[\w ]+?) but found (?P<got>[^:\n]+)|value is (?P<got2>[^\n]+?) while an? (?P<want2>[\w ]+?) was expected)'''
+priority = 60
+explain = """
+Nix needed {{want}}{{want2}} but got {{got}}{{got2}}. Typical: a string where a list is wanted (missing `[ ]`),
+a function that wasn't called with its argument, or a package set where a single package is wanted.
+"""
+fix = "Check the value on line {{line}}."
+
+[[rule]]
+id = "not-a-function"
+title = "Called something that isn't a function"
+match = '''attempt to call something which is not a function but (?P<got>[^:\n]+)'''
+priority = 65
+explain = """
+Nix read something on line {{line}} as a function call. Often two values next to each other without
+something between them (a missing `;`, or a missing `++` between two lists), or a stray argument.
+"""
+fix = "Look at line {{line}} for two values side by side."
+
+[[rule]]
+id = "cannot-coerce"
+title = "Can't turn that into text"
+match = '''cannot coerce (?P<got>[^\n]+?) to a string'''
+priority = 60
+explain = "Something tried to use {{got}} as text (for example inside \"${...}\"), but that kind of value can't become text."
+fix = "Use the right part of it (e.g. `${pkg}` for a package path, `toString x` for a number, `lib.concatStringsSep` for lists)."
+
+[[rule]]
+id = "missing-function-arg"
+title = "Function called without a required argument"
+match = '''function '(?P<fn>[^']*)' called without required argument '(?P<arg>[^']+)\''''
+priority = 70
+explain = """
+`{{fn}}` needs an argument called `{{arg}}` but didn't get it. In a module: `{{arg}}` isn't a normal
+module argument, so it must be passed via `specialArgs` / `extraSpecialArgs` in flake.nix. With
+`callPackage`: nothing named `{{arg}}` exists in pkgs.
+"""
+fix = "Pass `{{arg}}` in, or remove it from the function's argument list."
+
+[[rule]]
+id = "unexpected-function-arg"
+title = "Function got an argument it doesn't accept"
+match = '''function '(?P<fn>[^']*)' called with unexpected argument '(?P<arg>[^']+)\''''
+priority = 70
+explain = "`{{fn}}` doesn't take an argument called `{{arg}}`. Probably a typo, or an argument that was renamed in a newer version."
+fix = "Check the spelling of `{{arg}}`, or add `...` to the function's argument list if it should accept extras."
+
+[[rule]]
+id = "stack-overflow"
+title = "Evaluation went too deep"
+match = '''(?:stack overflow|max-call-depth exceeded)'''
+priority = 60
+explain = "Evaluation recursed too deep. Almost always an infinite loop in a function or overlay that keeps calling itself."
+fix = "Look for something that refers to itself, starting at the place shown."
+
+# ─── building ────────────────────────────────────────────────────────────────
+
+[[rule]]
+id = "hash-mismatch"
+title = "Hash doesn't match the download"
+match = '''hash mismatch in fixed-output derivation '(?P<drv>[^']+)':\s*specified:\s*(?P<specified>\S+)\s*got:\s*(?P<got>\S+)'''
+priority = 90
+locate = ["{{specified}}"]
+explain = """
+A download didn't match the hash written in the Nix file. If the hash is in your config, you either
+used a placeholder (that's normal: Nix tells you the real one) or the source changed.
+"""
+fix = """
+Replace the hash with the one Nix got:
+    {{got}}
+"""
+
+[[rule]]
+id = "build-failure"
+title = "A package failed to build"
+match = '''(?:Cannot build|builder for) '(?P<drv>/nix/store/[^']+\.drv)'(?:\.\s*Reason: builder failed| failed)'''
+priority = 60
+handler = "build"
+explain = """
+`{{name}}` failed while building.
+
+{{owner_note}}
+"""
+fix = """
+{{advice}}
+
+Full log: `nix log {{drv}}`
+"""
+
+[[rule]]
+id = "dependency-failed"
+title = "A dependency failed to build"
+match = '''(?:\d+ dependenc(?:y|ies) (?:of derivation '(?P<drv>[^']+)' )?failed(?: to build)?|Reason: \d+ dependenc(?:y|ies) failed)'''
+priority = 10
+blame = "unknown"
+explain = "Something your system needs failed to build. Nix's real error should be above this line in the output."
+fix = "Run with -v, or run nixed-error with no input so it can find the failed build log itself."
+
+[[rule]]
+id = "collision"
+title = "Two packages provide the same file"
+match = '''collision between [`'](?P<a>[^'`]+)['`] and [`'](?P<b>[^'`]+)['`]'''
+priority = 75
+scope = "both"
+blame = "you"
+explain = "Two installed packages both contain the same file, so they can't both be in your profile:\n  {{a}}\n  {{b}}"
+fix = "Remove one of them, or give one priority: `(lib.hiPrio pkgs.<name>)` in your package list."
+
+# ─── causes found inside build logs ──────────────────────────────────────────
+
+[[rule]]
+id = "log-tests-failed"
+title = "The package's own tests failed"
+match = '''(?i)(?:\b\d+ (?:tests? )?failed\b|test suite failed|tests? failed|FAILED \(failures?=)'''
+priority = 50
+scope = "log"
+blame = "upstream"
+explain = "The package compiled, but its test suite failed. Usually a bug in nixpkgs or flaky tests, not your config."
+fix = """
+Wait for a fix, or skip the tests with an overlay:
+    nixpkgs.overlays = [ (final: prev: { {{pname}} = prev.{{pname}}.overrideAttrs { doCheck = false; }; }) ];
+"""
+
+[[rule]]
+id = "log-out-of-memory"
+title = "Ran out of memory while building"
+match = '''(?i)(?:out of memory|cannot allocate memory|virtual memory exhausted|Killed\s+(?:signal 9|.*cc1)|killed by the OOM)'''
+priority = 80
+scope = "log"
+blame = "system"
+explain = "The build used more RAM than you have. Big packages (browsers, compilers) do this when building from source."
+fix = "Build with fewer jobs: `nh os switch -- --cores 2 --max-jobs 1`, add swap/zram, or use a version that's in the binary cache."
+
+# ─── your machine ────────────────────────────────────────────────────────────
+
+[[rule]]
+id = "disk-full"
+title = "Disk is full"
+match = '''No space left on device'''
+priority = 95
+scope = "both"
+blame = "system"
+explain = "A disk filled up during the rebuild. Often /nix/store, or the /boot partition (which only fits a few kernels)."
+fix = """
+Free space with `nh clean all --keep 3` (or `sudo nix-collect-garbage -d`), then check `df -h / /boot`.
+If /boot is full, set `boot.loader.systemd-boot.configurationLimit = 5;` and rebuild.
+"""
+
+[[rule]]
+id = "network"
+title = "Download failed (network)"
+match = '''(?:unable to download|Could(?:n't| not) resolve host|Connection timed out|SSL connect error|Failed to connect to|HTTP error 50\d|error: cannot connect to socket)'''
+priority = 85
+scope = "both"
+blame = "system"
+explain = "Nix couldn't download something. Your internet connection, DNS, or the server itself had a problem."
+fix = "Check your connection and try again. If one server is down, `--option substituters https://cache.nixos.org` can help."
+
+[[rule]]
+id = "bootloader"
+title = "Installing the bootloader failed"
+match = '''(?:Failed to install bootloader|install-grub\.pl.*failed|bootctl.*(?:failed|error))'''
+priority = 80
+blame = "system"
+explain = "The new system was built, but writing it to the boot partition failed. Most often /boot is full or not mounted."
+fix = "Check `df -h /boot` and `findmnt /boot`. Limit generations with `boot.loader.systemd-boot.configurationLimit = 5;`."
+
+[[rule]]
+id = "hm-file-in-the-way"
+title = "home-manager won't overwrite an existing file"
+match = '''Existing file '(?P<file>[^']+)' would be clobbered$'''
+priority = 90
+blame = "system"
+handler = "hm_file"
+explain = """
+home-manager wants to manage {{files}}, but {{already}}, and it won't delete {{it}}. Nothing
+in your config is wrong: something (you, or the program itself) wrote {{it_file}} where home-manager puts its links.
+"""
+fix = """
+Move {{it}} away and run home-manager again:
+{{moves}}
+    {{rerun}}
+
+Or let home-manager move such files aside by itself from now on:
+    home-manager.backupFileExtension = "backup";
+
+{{rerun_note}}
+"""
+
+[[rule]]
+id = "hm-backup-exists"
+title = "home-manager's backup file is already taken"
+match = '''Existing file '(?P<backup>[^']+)' would be clobbered by backing up '(?P<file>[^']+)''''
+priority = 91
+blame = "system"
+handler = "hm_file"
+explain = """
+A normal file is in the way of {{files}}. Your config sets `home-manager.backupFileExtension`, so
+home-manager tries to rename it to {{backups}}, but a backup by that name is already there{{backup_age}}, and
+home-manager won't overwrite it.
+"""
+fix = """
+Look at both files and keep what you need, then delete the old backup and run home-manager again:
+{{removes}}
+    {{rerun}}
+
+Or let home-manager replace old backups from now on:
+    home-manager.overwriteBackup = true;
+
+{{rerun_note}}
+"""
+
+[[rule]]
+id = "unit-failed"
+title = "A service failed after switching"
+match = '''(?:^error: (?P<user>user )?unit (?P<unit>\S+) failed|the following units failed: (?P<units>[^\n]+))'''
+priority = 5
+blame = "unknown"
+handler = "unit"
+explain = "{{explain_text}}"
+fix = "{{fix_text}}"

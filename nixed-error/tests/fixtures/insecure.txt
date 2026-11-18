@@ -1,0 +1,582 @@
+error:
+       … while calling anonymous lambda
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/attrsets.nix:1706:17:
+         1705|         zipAttrsWith (
+         1706|           name: values:
+             |                 ^
+         1707|           let
+
+       … while calling the 'head' builtin
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/attrsets.nix:1711:13:
+         1710|           if length values == 1 || pred here (elemAt values 1) (head values) then
+         1711|             head values
+             |             ^
+         1712|           else
+
+       … while calling anonymous lambda
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/modules.nix:283:38:
+          282|             let
+          283|               recurse = mapAttrs (n: v: if isOption v then v.value else recurse v);
+             |                                      ^
+          284|             in
+
+       … while evaluating the attribute 'value'
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/modules.nix:1181:7:
+         1180|     // {
+         1181|       value = addErrorContext "while evaluating the option `${showOption loc}':" (
+             |       ^
+         1182|         # Apply the 'apply' function to the merged value. This allows options to
+
+       … while evaluating the option `system.build.toplevel':
+
+       … while evaluating the attribute 'mergedValue'
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/modules.nix:1276:5:
+         1275|     # Type-check the remaining definitions, and merge them. Or throw if no definitions.
+         1276|     mergedValue =
+             |     ^
+         1277|       if isDefined then
+
+       … while evaluating a branch condition
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/modules.nix:1277:7:
+         1276|     mergedValue =
+         1277|       if isDefined then
+             |       ^
+         1278|         if type.merge ? v2 then
+
+       … while evaluating a branch condition
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/modules.nix:1231:7:
+         1230|       # original singleton straight to the type merge.
+         1231|       if
+             |       ^
+         1232|         length defs == 1
+
+       … in the right operand of the AND (&&) operator
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/modules.nix:1233:9:
+         1232|         length defs == 1
+         1233|         && addErrorContext "while evaluating definitions from `${(head defs).file}':" (
+             |         ^
+         1234|           !(head defs).value ? _type
+
+       … while evaluating definitions from `/nix/store/87lfqfz7mc5dm4w75qikxhd6lkr9jisr-source/nixos/modules/system/activation/top-level.nix':
+
+       … in the argument of the not operator
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/modules.nix:1234:12:
+         1233|         && addErrorContext "while evaluating definitions from `${(head defs).file}':" (
+         1234|           !(head defs).value ? _type
+             |            ^
+         1235|         )
+
+       … while evaluating the attribute 'value'
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/modules.nix:866:21:
+          865|             inherit (module) file;
+          866|             inherit value;
+             |                     ^
+          867|           }) module.config
+
+       … from call site
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/nixos/modules/system/activation/top-level.nix:78:26:
+           77|   # Handle assertions and warnings
+           78|   baseSystemAssertWarn = lib.asserts.checkAssertWarn config.assertions config.warnings baseSystem;
+             |                          ^
+           79|
+
+       … while calling 'checkAssertWarn'
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/asserts.nix:196:27:
+          195|   checkAssertWarn =
+          196|     assertions: warnings: val:
+             |                           ^
+          197|     let
+
+       … from call site
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/asserts.nix:203:7:
+          202|     else
+          203|       showWarnings warnings val;
+             |       ^
+          204|
+
+       … while calling 'showWarnings'
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/trivial.nix:1051:28:
+         1050|
+         1051|   showWarnings = warnings: res: foldr warn res warnings;
+             |                            ^
+         1052|
+
+       … from call site
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/trivial.nix:1051:33:
+         1050|
+         1051|   showWarnings = warnings: res: foldr warn res warnings;
+             |                                 ^
+         1052|
+
+       … while calling 'foldr'
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/lists.nix:138:14:
+          137|   foldr =
+          138|     op: nul: list:
+             |              ^
+          139|     let
+
+       … from call site
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/lists.nix:143:5:
+          142|     in
+          143|     fold' 0;
+             |     ^
+          144|
+
+       … while calling 'fold''
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/lists.nix:141:15:
+          140|       len = length list;
+          141|       fold' = n: if n == len then nul else op (elemAt list n) (fold' (n + 1));
+             |               ^
+          142|     in
+
+       … while evaluating a branch condition
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/lists.nix:141:18:
+          140|       len = length list;
+          141|       fold' = n: if n == len then nul else op (elemAt list n) (fold' (n + 1));
+             |                  ^
+          142|     in
+
+       … while calling the 'length' builtin
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/lists.nix:140:13:
+          139|     let
+          140|       len = length list;
+             |             ^
+          141|       fold' = n: if n == len then nul else op (elemAt list n) (fold' (n + 1));
+
+       … from call site
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/nixos/modules/system/activation/top-level.nix:78:72:
+           77|   # Handle assertions and warnings
+           78|   baseSystemAssertWarn = lib.asserts.checkAssertWarn config.assertions config.warnings baseSystem;
+             |                                                                        ^
+           79|
+
+       … while calling anonymous lambda
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/modules.nix:283:38:
+          282|             let
+          283|               recurse = mapAttrs (n: v: if isOption v then v.value else recurse v);
+             |                                      ^
+          284|             in
+
+       … while evaluating the attribute 'value'
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/modules.nix:1181:7:
+         1180|     // {
+         1181|       value = addErrorContext "while evaluating the option `${showOption loc}':" (
+             |       ^
+         1182|         # Apply the 'apply' function to the merged value. This allows options to
+
+       … while evaluating the option `warnings':
+
+       … while evaluating the attribute 'mergedValue'
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/modules.nix:1276:5:
+         1275|     # Type-check the remaining definitions, and merge them. Or throw if no definitions.
+         1276|     mergedValue =
+             |     ^
+         1277|       if isDefined then
+
+       … while evaluating a branch condition
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/modules.nix:1277:7:
+         1276|     mergedValue =
+         1277|       if isDefined then
+             |       ^
+         1278|         if type.merge ? v2 then
+
+       … while evaluating the attribute 'values'
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/modules.nix:1270:11:
+         1269|         {
+         1270|           values = defsSorted;
+             |           ^
+         1271|           inherit (defsFiltered) highestPrio;
+
+       … while evaluating a branch condition
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/modules.nix:1264:13:
+         1263|             # Avoid sorting if we don't have to.
+         1264|             if any (def: def.value._type or "" == "order") defsFiltered.values then
+             |             ^
+         1265|               sortProperties defsFiltered.values
+
+       … while calling the 'any' builtin
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/modules.nix:1264:16:
+         1263|             # Avoid sorting if we don't have to.
+         1264|             if any (def: def.value._type or "" == "order") defsFiltered.values then
+             |                ^
+         1265|               sortProperties defsFiltered.values
+
+       … from call site
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/modules.nix:1259:26:
+         1258|           # Process mkOverride properties.
+         1259|           defsFiltered = filterOverrides' defsNormalized;
+             |                          ^
+         1260|
+
+       … while calling anonymous lambda
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/modules.nix:1460:5:
+         1459|     in
+         1460|     defs:
+             |     ^
+         1461|     # Optimize for the singleton case, equivalent to the `else` clause.
+
+       … while evaluating a branch condition
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/modules.nix:1462:5:
+         1461|     # Optimize for the singleton case, equivalent to the `else` clause.
+         1462|     if length defs == 1 then
+             |     ^
+         1463|       {
+
+       … while calling the 'length' builtin
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/modules.nix:1462:8:
+         1461|     # Optimize for the singleton case, equivalent to the `else` clause.
+         1462|     if length defs == 1 then
+             |        ^
+         1463|       {
+
+       … while calling the 'concatMap' builtin
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/modules.nix:1244:28:
+         1243|           # Process mkMerge and mkIf properties.
+         1244|           defsNormalized = concatMap (
+             |                            ^
+         1245|             m:
+
+       … while calling anonymous lambda
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/modules.nix:1245:13:
+         1244|           defsNormalized = concatMap (
+         1245|             m:
+             |             ^
+         1246|             map (
+
+       … while calling the 'map' builtin
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/modules.nix:1246:13:
+         1245|             m:
+         1246|             map (
+             |             ^
+         1247|               value:
+
+       … while evaluating definitions from `/nix/store/87lfqfz7mc5dm4w75qikxhd6lkr9jisr-source/nixos/modules/system/boot/systemd.nix':
+
+       … from call site
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/modules.nix:1255:82:
+         1254|                 }
+         1255|             ) (addErrorContext "while evaluating definitions from `${m.file}':" (dischargeProperties m.value))
+             |                                                                                  ^
+         1256|           ) defs;
+
+       … while calling 'dischargeProperties'
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/modules.nix:1411:5:
+         1410|   dischargeProperties =
+         1411|     def:
+             |     ^
+         1412|     if def ? _type then
+
+       … while evaluating a branch condition
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/modules.nix:1412:5:
+         1411|     def:
+         1412|     if def ? _type then
+             |     ^
+         1413|       if def._type == "if" then
+
+       … while evaluating the attribute 'value'
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/modules.nix:866:21:
+          865|             inherit (module) file;
+          866|             inherit value;
+             |                     ^
+          867|           }) module.config
+
+       … while calling the 'concatLists' builtin
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/nixos/modules/system/boot/systemd.nix:563:7:
+          562|       in
+          563|       concatLists (
+             |       ^
+          564|         mapAttrsToList (
+
+       … while calling anonymous lambda
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/nixos/modules/system/boot/systemd.nix:565:17:
+          564|         mapAttrsToList (
+          565|           name: service:
+             |                 ^
+          566|           let
+
+       … while calling the 'concatLists' builtin
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/nixos/modules/system/boot/systemd.nix:571:11:
+          570|           in
+          571|           concatLists [
+             |           ^
+          572|             (optional (type == "oneshot" && (restart == "always" || restart == "on-success"))
+
+       … from call site
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/nixos/modules/system/boot/systemd.nix:572:14:
+          571|           concatLists [
+          572|             (optional (type == "oneshot" && (restart == "always" || restart == "on-success"))
+             |              ^
+          573|               "Service '${name}.service' with 'Type=oneshot' cannot have 'Restart=always' or 'Restart=on-success'"
+
+       … while calling 'optional'
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/lists.nix:801:20:
+          800|   */
+          801|   optional = cond: elem: if cond then [ elem ] else [ ];
+             |                    ^
+          802|
+
+       … while evaluating a branch condition
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/lists.nix:801:26:
+          800|   */
+          801|   optional = cond: elem: if cond then [ elem ] else [ ];
+             |                          ^
+          802|
+
+       … in the left operand of the AND (&&) operator
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/nixos/modules/system/boot/systemd.nix:572:42:
+          571|           concatLists [
+          572|             (optional (type == "oneshot" && (restart == "always" || restart == "on-success"))
+             |                                          ^
+          573|               "Service '${name}.service' with 'Type=oneshot' cannot have 'Restart=always' or 'Restart=on-success'"
+
+       … from call site
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/nixos/modules/system/boot/systemd.nix:567:20:
+          566|           let
+          567|             type = service.serviceConfig.Type or "";
+             |                    ^
+          568|             restart = service.serviceConfig.Restart or "no";
+
+       … while calling anonymous lambda
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/modules.nix:283:38:
+          282|             let
+          283|               recurse = mapAttrs (n: v: if isOption v then v.value else recurse v);
+             |                                      ^
+          284|             in
+
+       … while evaluating the attribute 'value'
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/modules.nix:1181:7:
+         1180|     // {
+         1181|       value = addErrorContext "while evaluating the option `${showOption loc}':" (
+             |       ^
+         1182|         # Apply the 'apply' function to the merged value. This allows options to
+
+       … while evaluating the option `systemd.services.mandb.serviceConfig':
+
+       (15 duplicate frames omitted)
+
+       … while evaluating a branch condition
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/modules.nix:1414:9:
+         1413|       if def._type == "if" then
+         1414|         if isBool def.condition then
+             |         ^
+         1415|           if def.condition then dischargeProperties def.content else [ ]
+
+       … while calling the 'isBool' builtin
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/modules.nix:1414:12:
+         1413|       if def._type == "if" then
+         1414|         if isBool def.condition then
+             |            ^
+         1415|           if def.condition then dischargeProperties def.content else [ ]
+
+       … while evaluating the attribute 'condition'
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/modules.nix:1581:13:
+         1580|     _type = "if";
+         1581|     inherit condition content;
+             |             ^
+         1582|   };
+
+       … while evaluating the attribute 'condition'
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/modules.nix:1581:13:
+         1580|     _type = "if";
+         1581|     inherit condition content;
+             |             ^
+         1582|   };
+
+       … from call site
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/nixos/lib/systemd-unit-options.nix:497:16:
+          496|         })
+          497|         (mkIf (config.script != "") rec {
+             |                ^
+          498|           jobScripts = makeJobScript {
+
+       … while calling anonymous lambda
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/modules.nix:283:38:
+          282|             let
+          283|               recurse = mapAttrs (n: v: if isOption v then v.value else recurse v);
+             |                                      ^
+          284|             in
+
+       … while evaluating the attribute 'value'
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/modules.nix:1181:7:
+         1180|     // {
+         1181|       value = addErrorContext "while evaluating the option `${showOption loc}':" (
+             |       ^
+         1182|         # Apply the 'apply' function to the merged value. This allows options to
+
+       … while evaluating the option `systemd.services.mandb.script':
+
+       (12 duplicate frames omitted)
+
+       … while evaluating definitions from `/nix/store/87lfqfz7mc5dm4w75qikxhd6lkr9jisr-source/nixos/modules/misc/man-db.nix':
+
+       … from call site
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/modules.nix:1255:82:
+         1254|                 }
+         1255|             ) (addErrorContext "while evaluating definitions from `${m.file}':" (dischargeProperties m.value))
+             |                                                                                  ^
+         1256|           ) defs;
+
+       … while calling 'dischargeProperties'
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/modules.nix:1411:5:
+         1410|   dischargeProperties =
+         1411|     def:
+             |     ^
+         1412|     if def ? _type then
+
+       … while evaluating a branch condition
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/modules.nix:1412:5:
+         1411|     def:
+         1412|     if def ? _type then
+             |     ^
+         1413|       if def._type == "if" then
+
+       … while evaluating the attribute 'value'
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/modules.nix:866:21:
+          865|             inherit (module) file;
+          866|             inherit value;
+             |                     ^
+          867|           }) module.config
+
+       … while calling the 'getAttr' builtin
+         at «nix-internal»/derivation-internal.nix:50:17:
+           49|     value = commonAttrs // {
+           50|       outPath = builtins.getAttr outputName strict;
+             |                 ^
+           51|       drvPath = strict.drvPath;
+
+       … while calling the 'derivationStrict' builtin
+         at «nix-internal»/derivation-internal.nix:37:12:
+           36|
+           37|   strict = derivationStrict drvAttrs;
+             |            ^
+           38|
+
+       … while evaluating derivation 'man-paths'
+         whose name attribute is located at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/pkgs/stdenv/generic/make-derivation.nix:651:11
+
+       … while evaluating attribute 'chosenOutputs' of derivation 'man-paths'
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/pkgs/build-support/buildenv/default.nix:113:9:
+          112|
+          113|         chosenOutputs = map (drv: {
+             |         ^
+          114|           paths =
+
+       … while calling the 'map' builtin
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/pkgs/build-support/buildenv/default.nix:113:25:
+          112|
+          113|         chosenOutputs = map (drv: {
+             |                         ^
+          114|           paths =
+
+       … while evaluating the attribute 'passthru.paths'
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/pkgs/build-support/buildenv/default.nix:151:19:
+          150|           # The `paths` attribute is referenced and overridden from passthru
+          151|           inherit paths;
+             |                   ^
+          152|         }
+
+       … while calling the 'filter' builtin
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/nixos/modules/misc/man-db.nix:36:19:
+           35|           name = "man-paths";
+           36|           paths = lib.subtractLists cfg.skipPackages config.environment.systemPackages;
+             |                   ^
+           37|           pathsToLink = [ "/share/man" ];
+
+       … while calling anonymous lambda
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/lists.nix:2116:30:
+         2115|   */
+         2116|   subtractLists = e: filter (x: !(elem x e));
+             |                              ^
+         2117|
+
+       … in the argument of the not operator
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/lists.nix:2116:35:
+         2115|   */
+         2116|   subtractLists = e: filter (x: !(elem x e));
+             |                                   ^
+         2117|
+
+       … while calling the 'elem' builtin
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/lists.nix:2116:35:
+         2115|   */
+         2116|   subtractLists = e: filter (x: !(elem x e));
+             |                                   ^
+         2117|
+
+       … in the condition of the assert statement
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/lib/customisation.nix:420:13:
+          419|           outPath =
+          420|             assert condition;
+             |             ^
+          421|             drv.outPath;
+
+       … while evaluating the attribute 'handled'
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/pkgs/stdenv/generic/check-meta.nix:686:9:
+          685|         valid = "no";
+          686|         handled = handle {
+             |         ^
+          687|           inherit attrs meta;
+
+       … from call site
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/pkgs/stdenv/generic/check-meta.nix:686:19:
+          685|         valid = "no";
+          686|         handled = handle {
+             |                   ^
+          687|           inherit attrs meta;
+
+       … while calling 'handle'
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/pkgs/stdenv/generic/check-meta.nix:623:5:
+          622|   handle =
+          623|     {
+             |     ^
+          624|       attrs,
+
+       … while calling the 'seq' builtin
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/pkgs/stdenv/generic/check-meta.nix:657:5:
+          656|     # Give all warnings first, then error if any
+          657|     seq (foldl' giveWarning null warnings) withError;
+             |     ^
+          658|
+
+       … while calling the 'throw' builtin
+         at «github:NixOS/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D»/pkgs/stdenv/generic/check-meta.nix:645:13:
+          644|           else
+          645|             throw msg;
+             |             ^
+          646|
+
+       error: Refusing to evaluate package 'nexusmods-app-unfree-0.21.1' in /nix/store/87lfqfz7mc5dm4w75qikxhd6lkr9jisr-source/pkgs/by-name/ne/nexusmods-app/package.nix:207 because it is marked as insecure
+
+       Known issues:
+        - NexusMods.App has been discontinued upstream: https://www.nexusmods.com/news/15424
+
+       You can install it anyway by allowing this package, using the
+       following methods:
+
+       a) To temporarily allow all insecure packages, you can use an environment
+          variable for a single invocation of the nix tools:
+
+            $ export NIXPKGS_ALLOW_INSECURE=1
+
+          Note: When using `nix shell`, `nix build`, `nix develop`, etc with a flake,
+                then pass `--impure` in order to allow use of environment variables.
+
+       b) for `nixos-rebuild` you can add ‘nexusmods-app-unfree-0.21.1’ to
+          `nixpkgs.config.permittedInsecurePackages` in the configuration.nix,
+          like so:
+
+            {
+              nixpkgs.config.permittedInsecurePackages = [
+                "nexusmods-app-unfree-0.21.1"
+              ];
+            }
+
+       c) For `nix-env`, `nix-build`, `nix-shell` or any other Nix command you can add
+          ‘nexusmods-app-unfree-0.21.1’ to `permittedInsecurePackages` in
+          ~/.config/nixpkgs/config.nix, like so:
+
+            {
+              permittedInsecurePackages = [
+                "nexusmods-app-unfree-0.21.1"
+              ];
+            }

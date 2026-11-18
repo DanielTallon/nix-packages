@@ -1,0 +1,15 @@
+warning: creating lock file "/home/fredrick/Develop/nix-packages/nixed-error/tests/.work/build-failure/flake.lock": 
+• Added input 'nixpkgs':
+    'https://releases.nixos.org/nixpkgs/nixpkgs-26.11pre1088030.8edc0c72e3a3/nixexprs.tar.zst?narHash=sha256-6BIvCXtdLW4HQwsOGkgH444aB3vCbHypE9TA78ireh8%3D' (2026-10-08)
+this derivation will be built:
+  /nix/store/7hcaway0vlx6hwhd8nqrw8k9p0bxv8zn-my-broken-script.drv
+building '/nix/store/7hcaway0vlx6hwhd8nqrw8k9p0bxv8zn-my-broken-script.drv'...
+error: Cannot build '/nix/store/7hcaway0vlx6hwhd8nqrw8k9p0bxv8zn-my-broken-script.drv'.
+       Reason: builder failed with exit code 2.
+       Output paths:
+         /nix/store/smzr2nggdasgq59kj5lvfrsw1ddgn88q-my-broken-script
+       Last 2 log lines:
+       > compiling...
+       > main.c:12: error: expected ';' before 'return'
+       For full logs, run:
+         nix log /nix/store/7hcaway0vlx6hwhd8nqrw8k9p0bxv8zn-my-broken-script.drv

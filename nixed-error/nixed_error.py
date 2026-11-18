@@ -1,0 +1,2529 @@
+#!/usr/bin/env python3
+"""nixed-error: explain a failed NixOS rebuild in plain words.
+
+Pure pattern matching against rules.toml. No network, no LLM.
+
+    nixed-error                       re-run the evaluation of your config and explain what fails
+    nh os switch 2>&1 | nixed-error   explain output you piped in
+    nixed-error build.log             explain a saved log
+"""
+from __future__ import annotations
+
+import argparse
+import bz2
+import difflib
+import json
+import os
+import re
+import shutil
+import socket
+import subprocess
+import sys
+import textwrap
+import threading
+import time
+import tomllib
+from dataclasses import dataclass, field
+from pathlib import Path
+
+VERSION = "0.1.0"
+HERE = Path(__file__).resolve().parent
+BUILTIN_RULES = Path(os.environ.get("NIXED_ERROR_RULES", HERE / "rules.toml"))
+CONFIG_HOME = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+STATE_HOME = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state"))
+USER_RULES = CONFIG_HOME / "nixed-error" / "rules.toml"
+UNKNOWN_DIR = STATE_HOME / "nixed-error" / "unknown"
+NIX_LOG_DIR = Path("/nix/var/log/nix/drvs")
+
+ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07")
+BOX_PREFIX_RE = re.compile(r"^[─-╿ ]*(?=[─-╿])[─-╿]+ ?", re.M)
+ERROR_LINE_RE = re.compile(r"^\s*error:\s?(.*)$")
+LOC_RE = re.compile(r"\bat (?P<loc>«[^»]*»[^\s:]*|/[^\s:]+):(?P<line>\d+):(?P<col>\d+)")
+DEF_FILE_RE = re.compile(r"^\s*- In `(?P<path>[^']+)'", re.M)
+SUGGEST_RE = re.compile(r"Did you mean (?P<s>[^\n]+?)\?$", re.M)
+OPTION_CTX_RE = re.compile(r"while evaluating the option `(?P<opt>[^']+)'")
+SNIPPET_RE = re.compile(r"^\s*\d*\s*\|")
+LOG_LINE_RE = re.compile(r"^\s*> ?(.*)$", re.M)
+TEMPLATE_RE = re.compile(r"\{\{(\w+)\}\}")
+STORE_PREFIX_RE = re.compile(r"^/nix/store/[a-z0-9]{32}-[^/]+/?")
+STORE_HASH_RE = re.compile(r"/nix/store/[a-z0-9]{32}-")
+
+
+# ─── where things live ───────────────────────────────────────────────────────
+
+
+@dataclass
+class Origin:
+    owner: str  # "you" | "upstream" | "cli"
+    label: str  # "your config", "nixpkgs", "home-manager", ...
+    display: str  # path as shown to the user
+    real: Path | None  # readable file, for code snippets
+
+
+@dataclass
+class Loc:
+    origin: Origin
+    line: int | None = None
+    col: int | None = None
+
+    def describe(self) -> str:
+        return self.origin.display + (f", line {self.line}" if self.line else "")
+
+
+def under(p: Path, base: Path) -> str | None:
+    try:
+        return str(p.relative_to(base))
+    except ValueError:
+        return None
+
+
+class Flake:
+    """Knows which paths are yours (the flake dir) and which belong to inputs."""
+
+    def __init__(self, path: str | None, load_inputs: bool = True):
+        self.dir: Path | None = None
+        self.store: Path | None = None
+        self.inputs: dict[str, Path] = {}
+        self._files: list[Path] | None = None
+        self.config: Config | None = None  # where it came from, for asking Nix about it (main() sets it)
+        if path:
+            p = Path(re.sub(r"^(path:|git\+file://)", "", path)).expanduser()
+            if p.is_dir():
+                self.dir = p.resolve()
+        if self.dir and load_inputs and (self.dir / "flake.nix").exists():
+            self._load_inputs()
+
+    def _load_inputs(self) -> None:
+        try:
+            out = subprocess.run(
+                ["nix", "--extra-experimental-features", "nix-command flakes",
+                 "flake", "archive", "--json", "--dry-run", str(self.dir)],
+                capture_output=True, text=True, timeout=30,
+            )
+            data = json.loads(out.stdout)
+        except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
+            return
+        self.store = Path(data["path"]) if data.get("path") else None
+
+        def walk(inputs: dict, prefix: str) -> None:
+            for name, info in inputs.items():
+                full = prefix + name
+                if info.get("path") and Path(info["path"]) not in self.inputs.values():
+                    self.inputs[full] = Path(info["path"])
+                walk(info.get("inputs", {}), full + "/")
+
+        walk(data.get("inputs", {}), "")
+
+    def origin(self, raw: str) -> Origin:
+        if raw.startswith("«"):
+            inner, _, rest = raw[1:].partition("»")
+            if inner == "string":
+                return Origin("cli", "command line", "(command line)", None)
+            if inner.startswith("path:"):
+                raw = inner[5:].split("?")[0] + rest
+            else:  # e.g. «github:NixOS/nixpkgs/abc123»/lib/modules.nix or «https://…/nixexprs.tar.zst?…»
+                url = inner.split("?")[0]
+                if "nixpkgs" in url or "nixexprs" in url:
+                    label = "nixpkgs"
+                elif m := re.match(r"(?:github|gitlab|sourcehut):[^/]+/([^/]+)", url):
+                    label = m[1]
+                else:
+                    label = re.sub(r"^[\w+]+:(//)?", "", url).strip("/").split("/")[-1] or "a flake input"
+                return Origin("upstream", label, f"{label}: {rest.lstrip('/')}", None)
+        p = Path(raw)
+        if self.dir and (rel := under(p, self.dir)) is not None:
+            return Origin("you", "your config", rel, p)
+        if self.store and (rel := under(p, self.store)) is not None:
+            real = self.dir / rel if self.dir and (self.dir / rel).exists() else p
+            return Origin("you", "your config", rel, real)
+        for name, base in self.inputs.items():
+            if (rel := under(p, base)) is not None:
+                return Origin("upstream", name, f"{name}: {rel}", p if p.exists() else None)
+        if raw.startswith("/nix/store/"):
+            rel = STORE_PREFIX_RE.sub("", raw)
+            if self.dir and rel and (self.dir / rel).is_file() and self._same_file(p, self.dir / rel):
+                return Origin("you", "your config", rel, self.dir / rel)
+            label = "nixpkgs" if rel.split("/")[0] in ("nixos", "pkgs", "lib") else "a flake input"
+            return Origin("upstream", label, f"{label}: {rel}", p if p.exists() else None)
+        # Without flakes, nixpkgs comes from a channel: a symlink into the store
+        # (/nix/var/nix/profiles/per-user/root/channels/nixos/..., ~/.nix-defexpr/channels/...).
+        try:
+            resolved = p.resolve()
+        except OSError:
+            resolved = p
+        if str(resolved).startswith("/nix/store/") or "/channels/" in raw:
+            rel = STORE_PREFIX_RE.sub("", str(resolved)) if str(resolved).startswith("/nix/store/") else raw
+            if m := re.search(r"/channels/([^/]+)/(.*)", raw):
+                label, rel = m[1], m[2]
+                label = "nixpkgs" if label.startswith(("nixos", "nixpkgs")) else label
+            else:
+                label = "nixpkgs" if rel.split("/")[0] in ("nixos", "pkgs", "lib") else "a channel"
+            return Origin("upstream", label, f"{label}: {rel}", p if p.exists() else None)
+        shown = "~/" + rel if (rel := under(p, Path.home())) else raw
+        return Origin("you", "your config", shown, p if p.exists() else None)
+
+    @staticmethod
+    def _same_file(store: Path, mine: Path) -> bool:
+        """Is this store path a copy of your file? (Lazy trees give virtual paths that don't exist.)"""
+        try:
+            return not store.exists() or store.read_bytes() == mine.read_bytes()
+        except OSError:
+            return False
+
+    def files(self) -> list[Path]:
+        if self._files is None:
+            self._files = []
+            if self.dir:
+                try:
+                    out = subprocess.run(
+                        ["git", "-C", str(self.dir), "ls-files", "-co", "--exclude-standard", "*.nix"],
+                        capture_output=True, text=True, timeout=10, check=True,
+                    )
+                    self._files = [self.dir / f for f in out.stdout.splitlines()]
+                    if not self._files:  # a folder another repo ignores: git lists nothing
+                        raise subprocess.SubprocessError
+                except (OSError, subprocess.SubprocessError):
+                    self._files = [
+                        f for f in self.dir.rglob("*.nix")
+                        if not any(part in (".git", "result") for part in f.parts)
+                    ]
+        return self._files
+
+    def find(self, needles: list[str], prefer: list[Path] = (), regex: bool = False) -> Loc | None:
+        """First line in your config containing one of the needles (tried in order)."""
+        files = list(dict.fromkeys([*prefer, *self.files()]))
+        for needle in needles:
+            if not needle:
+                continue
+            pat = re.compile(needle if regex else re.escape(needle))
+            for f in files:
+                for i, line in enumerate(read_lines(f)):
+                    if line.lstrip().startswith("#"):
+                        continue
+                    if m := pat.search(line):
+                        return Loc(self.origin(str(f)), i + 1, m.start() + 1)
+        return None
+
+
+def read_lines(path: Path | None) -> list[str]:
+    try:
+        return path.read_text(errors="replace").splitlines() if path else []
+    except OSError:
+        return []
+
+
+# ─── rules ───────────────────────────────────────────────────────────────────
+
+
+@dataclass
+class Rule:
+    id: str
+    title: str
+    match: re.Pattern
+    priority: int = 50
+    blame: str = "auto"  # you | upstream | system | auto
+    explain: str = ""
+    fix: str = ""
+    requires: re.Pattern | None = None  # must ALSO appear somewhere in the full output
+    locate: list[str] = field(default_factory=list)  # text to search for in your files
+    locate_regex: bool = False
+    handler: str | None = None
+    scope: str = "error"  # error | log | both
+    user: bool = False
+
+
+def load_rules() -> list[Rule]:
+    by_id: dict[str, Rule] = {}
+    for path, user in ((BUILTIN_RULES, False), (USER_RULES, True)):
+        if not path.exists():
+            continue
+        try:
+            data = tomllib.loads(path.read_text())
+        except tomllib.TOMLDecodeError as e:
+            warn(f"skipping {path}: {e}")
+            continue
+        for raw in data.get("rule", []):
+            try:
+                rule = Rule(
+                    id=raw["id"], title=raw["title"],
+                    match=re.compile(raw["match"], re.M),
+                    priority=raw.get("priority", 50), blame=raw.get("blame", "auto"),
+                    explain=raw.get("explain", ""), fix=raw.get("fix", ""),
+                    requires=re.compile(raw["requires"], re.M | re.S) if raw.get("requires") else None,
+                    locate=raw.get("locate", []), locate_regex=raw.get("locate_regex", False),
+                    handler=raw.get("handler"), scope=raw.get("scope", "error"), user=user,
+                )
+            except (KeyError, re.error) as e:
+                warn(f"skipping rule {raw.get('id', '?')} in {path}: {e}")
+                continue
+            by_id[rule.id] = rule  # user rules replace built-in ones with the same id
+    return list(by_id.values())
+
+
+def render(template: str, vars: dict[str, str]) -> str:
+    return TEMPLATE_RE.sub(lambda m: vars.get(m[1], ""), template).strip("\n").rstrip()
+
+
+# ─── parsing nix output ──────────────────────────────────────────────────────
+
+
+@dataclass
+class Block:
+    text: str
+    message: str
+    loc: tuple[str, int, int] | None
+
+
+def clean(text: str) -> str:
+    return BOX_PREFIX_RE.sub("", ANSI_RE.sub("", text)).replace("\r", "")
+
+
+def split_blocks(text: str) -> list[Block]:
+    lines = text.splitlines()
+    starts = [i for i, l in enumerate(lines) if ERROR_LINE_RE.match(l)]
+    if not starts:
+        return [Block(text, text.strip(), None)]
+    blocks = []
+    for n, s in enumerate(starts):
+        chunk = lines[s:(starts[n + 1] if n + 1 < len(starts) else len(lines))]
+        body = [ERROR_LINE_RE.match(chunk[0])[1], *chunk[1:]]
+        msg, loc = [], None
+        for l in body:
+            st = l.strip()
+            if st.startswith("…"):
+                break  # trace frames start here
+            if st.startswith("at ") and (m := LOC_RE.search(l)):
+                loc = loc or (m["loc"], int(m["line"]), int(m["col"]))
+                continue
+            if not SNIPPET_RE.match(l):
+                msg.append(l)
+        message = (msg[0].strip() + "\n" + textwrap.dedent("\n".join(msg[1:]))).strip()
+        blocks.append(Block("\n".join(chunk), message, loc))
+    return blocks
+
+
+def frames(text: str) -> list[tuple[str, int, int]]:
+    return [(m["loc"], int(m["line"]), int(m["col"])) for m in LOC_RE.finditer(text)]
+
+
+def def_files(text: str) -> list[str]:
+    out = []
+    for m in DEF_FILE_RE.finditer(text):
+        if p := re.match(r"(/[^\s,#']+|«[^»]+»[^\s,#']*)", m["path"]):
+            out.append(p[1])
+    return list(dict.fromkeys(out))
+
+
+def best_match(rules: list[Rule], blocks: list[Block], full: str, scope: str):
+    best = None
+    for bi, b in enumerate(blocks):
+        for r in rules:
+            if scope == "error" and r.scope == "log" or scope == "log" and r.scope == "error":
+                continue
+            if not (m := r.match.search(b.text)):
+                continue
+            if r.requires and not r.requires.search(full):
+                continue
+            key = (r.priority, r.user, bi)
+            if best is None or key > best[0]:
+                best = (key, r, m, b)
+    return best[1:] if best else None
+
+
+# ─── the report ──────────────────────────────────────────────────────────────
+
+
+@dataclass
+class Report:
+    title: str
+    rule_id: str | None
+    blame: str = "unknown"  # you | upstream | system | unknown
+    explain: str = ""
+    fix: str = ""
+    loc: Loc | None = None
+    others: list[Loc] = field(default_factory=list)
+    nix_said: str = ""
+    said_by: str = "Nix"
+    suggest: str = ""
+    context: str = ""
+    note: str = ""
+    log_tail: list[str] = field(default_factory=list)
+    log_label: str = "the build log"
+    cause: Report | None = None
+    source: str = ""
+    saved_to: Path | None = None
+    whose: str = ""  # who it is, when the location doesn't say (an upstream module you turn on in your files)
+
+
+def analyze(text: str, flake: Flake, rules: list[Rule], scope: str = "error") -> Report:
+    text = clean(text)
+    blocks = split_blocks(text)
+    hit = best_match(rules, blocks, text, scope)
+    all_frames = frames(text)
+    defs = [flake.origin(d) for d in def_files(hit[2].text if hit else text)]
+
+    if hit:
+        rule, m, block = hit
+        vars = {k: v for k, v in m.groupdict().items() if v is not None}
+    else:
+        rule = None
+        block = [b for b in blocks if b.message][-1] if any(b.message for b in blocks) else blocks[-1]
+        vars = {}
+    derive_vars(vars, block, flake)
+
+    rep = Report(title=rule.title if rule else "Unrecognised error", rule_id=rule.id if rule else None)
+    rep.nix_said = shorten_paths(block.message, flake)
+    if s := SUGGEST_RE.search(block.text):
+        rep.suggest = s["s"]
+    if ctx := OPTION_CTX_RE.findall(text):
+        rep.context = ctx[-1]
+    own_loc = Loc(flake.origin(block.loc[0]), block.loc[1], block.loc[2]) if block.loc else None
+
+    if rep.context and rep.context.endswith(".package"):
+        # a module's `package` option failed: you probably enabled that module (programs.foo = ...)
+        parts = re.findall(r'"[^"]*"|[^.]+', rep.context)[:-1]
+        vars.setdefault("pkg_option", ".".join(parts[-2:]))
+
+    # 1. a rule can say what text to look for in your files
+    if rule and rule.locate:
+        # needles naming a var we don't have are skipped (they'd match too much); regex needles get vars escaped
+        subst = {k: re.escape(v) for k, v in vars.items()} if rule.locate_regex else vars
+        needles = [render(t, subst) for t in rule.locate if all(n in vars for n in TEMPLATE_RE.findall(t))]
+        rep.loc = flake.find(needles, [d.real for d in defs if d.owner == "you" and d.real], rule.locate_regex)
+    # 2. otherwise the most likely suspect from nix's own output
+    if rep.loc is None:
+        yours = [Loc(flake.origin(f[0]), f[1], f[2]) for f in all_frames]
+        yours = [l for l in yours if l.origin.owner == "you"]
+        if own_loc and own_loc.origin.owner == "you":
+            rep.loc = own_loc
+        elif defs and defs[0].owner == "you":
+            rep.loc = Loc(defs[0])
+        elif yours:
+            rep.loc = yours[-1]
+            if own_loc and own_loc.origin.owner == "upstream":
+                rep.note = (f"The error was raised inside {own_loc.origin.label}, but the last of your own "
+                            f"files in the chain is {rep.loc.describe()}. That is usually where to look.")
+        else:
+            rep.loc = own_loc
+    rep.others = [Loc(d) for d in defs if d.owner == "you" and (not rep.loc or d.real != rep.loc.origin.real)]
+
+    if rule and rule.handler in HANDLERS:
+        HANDLERS[rule.handler](rep, vars, flake, rules, text)
+
+    if rep.loc and rep.loc.line:
+        vars.setdefault("line", str(rep.loc.line))
+    if rep.loc:
+        vars.setdefault("file", rep.loc.origin.display)
+        vars.setdefault("input", rep.loc.origin.label)
+
+    if rule:
+        if rep.blame == "unknown":
+            rep.blame = rule.blame if rule.blame != "auto" else (
+                {"you": "you", "upstream": "upstream"}.get(rep.loc.origin.owner, "unknown") if rep.loc else "unknown")
+        rep.explain = render(rule.explain, vars)
+        rep.fix = render(rule.fix, vars)
+    else:
+        rep.blame = {"you": "you", "upstream": "upstream"}.get(rep.loc.origin.owner, "unknown") if rep.loc else "unknown"
+        rep.explain = ("nixed-error has no rule for this error yet. Below is what Nix said, with the noise "
+                       "stripped, and the most likely place in your files.")
+    return rep
+
+
+def derive_vars(vars: dict[str, str], block: Block, flake: Flake) -> None:
+    home = str(Path.home())
+    for k, v in list(vars.items()):
+        if v.startswith(home):
+            v = "~" + v[len(home):]
+        if "\n" in v.strip() or v.strip().startswith("- "):  # lists / multi-line captures: re-indent evenly
+            v = "\n".join("  " + l.strip() for l in v.strip().splitlines())
+        vars[k] = v
+    if opt := vars.get("option"):
+        parts = re.findall(r'"[^"]*"|[^.]+', opt)
+        vars["opt_last"] = parts[-1]
+        vars["opt_tail2"] = ".".join(parts[-2:])
+        vars["opt_parent"] = ".".join(parts[:-1][-2:])
+    if pkg := vars.get("pkg"):
+        vars["pname"] = re.sub(r"-\d[\w.+~-]*$", "", pkg)
+    # "Definition values:" lists from the module system, with readable paths
+    if "Definition values:" in block.message:
+        defs = block.message.split("Definition values:", 1)[1]
+        defs = re.split(r"\n(?:Did you mean|Use `lib\.mk)", defs)[0]
+        vars["definitions"] = textwrap.indent(shorten_paths(textwrap.dedent(defs).strip(), flake), "  ")
+    elif "conflicting definition values:" in block.message:
+        defs = block.message.split("conflicting definition values:", 1)[1].split("\nUse `lib.mk")[0]
+        vars["definitions"] = textwrap.indent(shorten_paths(textwrap.dedent(defs).strip(), flake), "  ")
+
+
+def shorten_paths(s: str, flake: Flake) -> str:
+    def repl(m: re.Match) -> str:
+        return flake.origin(m[0]).display
+
+    return re.sub(r"/nix/store/[a-z0-9]{32}-[^\s/'`\":]+/[^\s'`\":]+|(?<![\w/])/(?:home|etc|tmp)/[^\s'`\":]+",
+                  repl, s)
+
+
+# ─── handlers: rule-specific detective work ──────────────────────────────────
+
+OPEN = {"{": "}", "[": "]", "(": ")"}
+CLOSE = {v: k for k, v in OPEN.items()}
+
+
+def _skip_string(src: str, i: int) -> int:
+    """Index just past the string starting at i, or -1 if it never ends."""
+    indented = src.startswith("''", i)
+    i += 2 if indented else 1
+    depth = 0
+    while i < len(src):
+        if depth:  # inside ${ ... } within the string
+            if src[i] == "{":
+                depth += 1
+            elif src[i] == "}":
+                depth -= 1
+            elif src[i] == '"' or src.startswith("''", i):
+                if (i := _skip_string(src, i)) < 0:
+                    return -1
+                continue
+            i += 1
+            continue
+        if indented:
+            if src.startswith("''\\", i):
+                i += 4
+                continue
+            if src.startswith("'''", i) or src.startswith("''$", i):
+                i += 3
+                continue
+            if src.startswith("''", i):
+                return i + 2
+        else:
+            if src[i] == "\\":
+                i += 2
+                continue
+            if src[i] == '"':
+                return i + 1
+        if src.startswith("${", i):
+            depth, i = 1, i + 2
+            continue
+        i += 1
+    return -1
+
+
+def scan_brackets(src: str, stop: int | None = None, starts: list | None = None) -> dict | None:
+    """Tiny Nix tokenizer. Returns the first bracket/string problem it finds.
+
+    With `stop` (a character offset), returns {"kind": "stack", ...} listing the brackets still
+    open at that point, unless a problem shows up before it.
+    With `starts` (a list), also appends the brackets open at the start of every line after the
+    first, or None for a line that starts inside a string or comment.
+    """
+    stack: list[tuple[str, int]] = []
+    i, line, n = 0, 1, len(src)
+    while i < n:
+        if stop is not None and i >= stop:
+            break
+        c = src[i]
+        if c == "\n":
+            line += 1
+            i += 1
+            if starts is not None:
+                starts.append(stack.copy())
+        elif c == "#":
+            j = src.find("\n", i)
+            i = n if j < 0 else j
+        elif src.startswith("/*", i):
+            j = src.find("*/", i + 2)
+            if j < 0:
+                return {"kind": "comment", "char": "/*", "line": line}
+            line += src.count("\n", i, j)
+            if starts is not None:
+                starts.extend([None] * src.count("\n", i, j))
+            i = j + 2
+        elif c == '"' or src.startswith("''", i):
+            end = _skip_string(src, i)
+            if end < 0:
+                return {"kind": "string", "char": '"' if c == '"' else "''", "line": line}
+            line += src.count("\n", i, end)
+            if starts is not None:
+                starts.extend([None] * src.count("\n", i, end))
+            i = end
+        elif c in OPEN:
+            stack.append((c, line))
+            i += 1
+        elif c in CLOSE:
+            if not stack or stack[-1][0] != CLOSE[c]:
+                return {"kind": "mismatch", "char": c, "line": line, "open": stack[-1] if stack else None}
+            stack.pop()
+            i += 1
+        else:
+            i += 1
+    if stop is not None:
+        return {"kind": "stack", "stack": stack, "line": line}
+    if stack:
+        return {"kind": "unclosed", "char": stack[-1][0], "line": stack[-1][1]}
+    return None
+
+
+def open_at(lines: list[str], line: int, col: int) -> list[tuple[str, int]]:
+    """Brackets still open just before (line, col), innermost last. Empty if the scan hits a problem first."""
+    stop = sum(len(l) + 1 for l in lines[: line - 1]) + max(col - 1, 0)
+    result = scan_brackets("\n".join(lines), stop)
+    return result["stack"] if result and result["kind"] == "stack" else []
+
+
+def bracket_note(problem: dict) -> str:
+    ch, ln = problem["char"], problem["line"]
+    if problem["kind"] == "unclosed":
+        return f"The `{ch}` opened on line {ln} is never closed with `{OPEN[ch]}`."
+    if problem["kind"] == "string":
+        return f"The string starting with {ch} on line {ln} is never closed."
+    if problem["kind"] == "comment":
+        return f"The /* comment on line {ln} is never closed with */."
+    if problem.get("open"):
+        o, ol = problem["open"]
+        return f"Line {ln} closes with `{ch}`, but the bracket that is still open is the `{o}` from line {ol}."
+    return f"Line {ln} has a `{ch}` that closes something that was never opened."
+
+
+def h_semicolon(rep: Report, vars: dict, flake: Flake, rules, text: str) -> None:
+    loc = rep.loc
+    lines = read_lines(loc.origin.real) if loc else []
+    if not lines or not loc.line or loc.line > len(lines):
+        vars["fix_line"] = str(loc.line) if loc and loc.line else "?"
+        return
+    before = lines[loc.line - 1][: (loc.col or 1) - 1]
+    if re.fullmatch(r"""\s*[\w."'${}/-]*\s*""", before):
+        # Only an attribute name precedes the error, so the `;` belonged at the end of the previous line.
+        j = loc.line - 2
+        while j >= 0 and (not lines[j].strip() or lines[j].lstrip().startswith("#")):
+            j -= 1
+        if j >= 0:
+            rep.loc = Loc(loc.origin, j + 1, len(lines[j].rstrip()) + 1)
+            vars["fix_line"] = str(j + 1)
+            vars["note"] = (f"Nix reports line {loc.line}, because it only noticed the problem when the "
+                            f"next setting started. The real mistake is at the end of line {j + 1}.")
+            return
+    vars["fix_line"] = str(loc.line)
+
+
+def h_brackets(rep: Report, vars: dict, flake: Flake, rules, text: str) -> None:
+    if not rep.loc or not rep.loc.origin.real:
+        return
+    lines = read_lines(rep.loc.origin.real)
+    if rep.rule_id == "unexpected-eof" or not rep.loc.line:
+        problem = scan_brackets("\n".join(lines))
+    else:
+        # Nix's position is reliable; only a problem found before it explains it better.
+        stop = sum(len(l) + 1 for l in lines[: rep.loc.line - 1]) + max((rep.loc.col or 1) - 1, 0)
+        problem = scan_brackets("\n".join(lines), stop)
+        if problem and problem["kind"] == "stack":
+            problem = None
+    if problem:
+        vars["note"] = bracket_note(problem)
+        rep.loc = Loc(rep.loc.origin, problem["line"])
+
+
+def guess_missing_opener(lines: list[str], close_line: int, opener: str) -> int | None:
+    """Walk up from a stray closer to the assignment whose value should have opened it."""
+    for j in range(close_line - 2, -1, -1):
+        code = lines[j].split("#")[0].rstrip()
+        if not code.strip():
+            continue
+        if re.search(r"(?<![=!<>])=(?![=>])", code):
+            return None if code.endswith(opener) else j + 1
+    return None
+
+
+def h_stray_closer(rep: Report, vars: dict, flake: Flake, rules, text: str) -> None:
+    closer = vars.get("got", "]")
+    opener = CLOSE[closer]
+    vars["opener"] = opener
+    vars["close_line"] = str(rep.loc.line) if rep.loc and rep.loc.line else "?"
+    lines = read_lines(rep.loc.origin.real) if rep.loc else []
+    if not lines or not rep.loc.line:
+        vars["fix_text"] = f"Find where this `{opener}` ... `{closer}` should start and add the `{opener}`."
+        return
+    close_line = rep.loc.line
+    vars["close_line"] = str(close_line)
+    stack = open_at(lines, close_line, rep.loc.col or 1)
+    if stack and any(o == opener for o, _ in stack):
+        # The matching opener exists further out, so the bracket opened last was never closed.
+        top, top_line = stack[-1]
+        rep.title = "Missing closing bracket"
+        rep.others = [Loc(rep.loc.origin, top_line)]
+        vars["explain_text"] = (f"The `{top}` opened on line {top_line} is never closed, so the `{closer}` on "
+                                f"line {close_line} arrives while it's still open.")
+        vars["fix_text"] = f"Add `{OPEN[top]}` before the `{closer}` on line {close_line}, to close the `{top}` from line {top_line}."
+        return
+    vars["explain_text"] = f"Line {close_line} has a `{closer}` that closes something that was never opened."
+    guess = guess_missing_opener(lines, close_line, opener)
+    if guess:
+        rep.others = [Loc(rep.loc.origin, close_line)]
+        rep.loc = Loc(rep.loc.origin, guess, len(lines[guess - 1].rstrip()) + 1)
+        vars["guess_line"] = str(guess)
+        vars["note"] = (f"Most likely line {guess} is missing a `{opener}` at the end. Without it, Nix reads "
+                        f"everything after it as one long expression, and only notices on line {close_line}, "
+                        f"which is why its message is about a `;`.")
+        vars["fix_text"] = f"Add `{opener}` at the end of line {guess}:\n    {lines[guess - 1].strip()} {opener}"
+    else:
+        vars["fix_text"] = (f"Find where this `{opener}` ... `{closer}` should start (usually right after an "
+                            f"`=`) and add the missing `{opener}`.")
+
+
+ASSIGN_RE = re.compile(r"""^\s*([\w."'${}-]+)\s*=(?![=>])""")
+
+
+def similar_setting(lines: list[str], name: str, skip: int) -> int | None:
+    """Line of the setting whose name shares the longest beginning with `name` (at least 4 characters)."""
+    best, best_len = None, 3
+    for i, l in enumerate(lines):
+        if i + 1 == skip or not (m := ASSIGN_RE.match(l)):
+            continue
+        n = len(os.path.commonprefix([m[1], name]))
+        if n > best_len:
+            best, best_len = i + 1, n
+    return best
+
+
+def h_equals_inside(rep: Report, vars: dict, flake: Flake, rules, text: str) -> None:
+    """An unexpected `=`: usually a `name = value` setting that ended up inside a list."""
+    lines = read_lines(rep.loc.origin.real) if rep.loc else []
+    ln, col = (rep.loc.line or 0, rep.loc.col or 1) if rep.loc else (0, 1)
+    stack = open_at(lines, ln, col) if lines and ln else []
+    if stack and stack[-1][0] == "[":
+        ol = stack[-1][1]
+        name = m[1] if (m := ASSIGN_RE.match(lines[ln - 1])) else lines[ln - 1].split("=")[0].strip()
+        rep.others = [Loc(rep.loc.origin, ol)]
+        vars["explain_text"] = (f"Line {ln} sets `{name}`, but it's inside the list opened on line {ol} "
+                                f"(`{lines[ol - 1].strip()}`). Lists only hold values, not `name = value` settings.")
+        near = similar_setting(lines, name, ln)
+        outer = m[1] if (m := ASSIGN_RE.match(lines[ol - 1])) else ""
+        # The same setting again, inside its own list (`foo = [ … foo = [ x ]; … ]`): a snippet pasted
+        # into the list it was meant to add to. Keep its contents, drop the wrapper.
+        close = None
+        if outer == name and lines[ln - 1].split("#")[0].rstrip().endswith("["):
+            close = next((j for j in range(ln + 1, min(len(lines), ln + 200) + 1)
+                          if not any(s[0] == "[" and s[1] == ln
+                                     for s in open_at(lines, j, len(lines[j - 1]) + 1))), None)
+        if close:
+            vars["explain_text"] = (f"Line {ln} sets `{name}` again, inside the `{name}` list that line {ol} "
+                                    f"already opened. Lists only hold values, not `name = value` settings.")
+            vars["note"] = (f"It looks like a snippet was pasted into the list it was meant to add to. Its "
+                            f"contents (lines {ln + 1}–{close - 1}) can stay where they are; only the wrapper has to go.")
+            vars["fix_text"] = (f"Delete line {ln} (`{lines[ln - 1].strip()}`) and line {close} "
+                                f"(`{lines[close - 1].strip()}`), keeping the lines in between.")
+        elif near:
+            vars["note"] = (f"It probably belongs with the similar settings around line {near} "
+                            f"(`{lines[near - 1].strip()}`).")
+            vars["fix_text"] = f"Move line {ln} out of the list, to the block around line {near}."
+        else:
+            vars["fix_text"] = f"Move line {ln} out of the list, into the {{ }} block where that setting belongs."
+    else:
+        rep.title = "Syntax error"
+        vars["explain_text"] = (f"Nix found an `=` on line {ln} where it didn't make sense. Common causes: a "
+                                "missing `;` at the end of the line before, or a missing `{` or `}`.")
+        vars["fix_text"] = f"Look at line {ln} and the line just above it."
+
+
+def last_list_before(lines: list[str], ln: int) -> tuple[int, int] | None:
+    """(opened, closed) lines of the last list that closed before line `ln`."""
+    for j in range(ln - 2, -1, -1):
+        code = lines[j].split("#")[0]
+        if (k := code.rfind("]")) >= 0:
+            stack = open_at(lines, j + 1, k + 1)
+            if stack and stack[-1][0] == "[":
+                return stack[-1][1], j + 1
+            return None
+    return None
+
+
+def h_bare_word(rep: Report, vars: dict, flake: Flake, rules, text: str) -> None:
+    """Nix wanted `name = ...` but found a lone word: usually a package that slipped out of its list."""
+    lines = read_lines(rep.loc.origin.real) if rep.loc else []
+    ln, col = (rep.loc.line or 0, rep.loc.col or 1) if rep.loc else (0, 1)
+    word, word_line = None, ln
+    if lines and ln:
+        before = lines[ln - 1][: col - 1].split("#")[0].strip()
+        if before:
+            word = before
+        else:
+            j = ln - 2
+            while j >= 0 and not lines[j].split("#")[0].strip():
+                j -= 1
+            if j >= 0:
+                word, word_line = lines[j].split("#")[0].strip(), j + 1
+    if not word or not re.fullmatch(r"[\w.'-]+", word):
+        rep.title = "Syntax error"
+        vars["explain_text"] = (f"Nix expected a setting name followed by `=` on line {ln}, but found something else. "
+                                "Common causes: a missing `;` at the end of the line before, or a value without "
+                                "`name =` in front of it.")
+        vars["fix_text"] = f"Look at line {ln} and the line just above it."
+        return
+    rep.loc = Loc(rep.loc.origin, word_line)
+    is_pkg = word.split(".")[-1] in set(nixpkgs_names(flake)) or word.startswith("pkgs")
+    vars["explain_text"] = (f"Line {word_line} has `{word}` on its own, inside a {{ }} block where only "
+                            f"`name = value;` settings are allowed." +
+                            (f" `{word}` is a package name, so it probably slipped out of a package list." if is_pkg else ""))
+    lst = last_list_before(lines, word_line)
+    if lst:
+        opened, closed = lst
+        rep.others = [Loc(rep.loc.origin, closed)]
+        vars["note"] = (f"The list just above (line {opened}: `{lines[opened - 1].strip()}`) ends on line {closed}, "
+                        f"before `{word}`.")
+        vars["fix_text"] = f"Move `{word}` up, before the `]` on line {closed}."
+    else:
+        vars["fix_text"] = f"Move `{word}` into the list where it belongs, or turn it into a setting (`{word} = ...;`)."
+
+
+def h_semicolon_inside(rep: Report, vars: dict, flake: Flake, rules, text: str) -> None:
+    """An unexpected `;`: if a list or ( ) is still open there, its closing bracket is missing."""
+    lines = read_lines(rep.loc.origin.real) if rep.loc else []
+    ln, col = (rep.loc.line or 0, rep.loc.col or 1) if rep.loc else (0, 1)
+    stack = open_at(lines, ln, col) if lines and ln else []
+    if stack and stack[-1][0] in "[(":
+        o, ol = stack[-1]
+        closer, what = OPEN[o], "list" if o == "[" else "( )"
+        rep.others = [Loc(rep.loc.origin, ol)]
+        current = lines[ln - 1]
+        fixed = (current[: col - 1] + closer + current[col - 1:]).strip()
+        vars["explain_text"] = (f"The `{o}` opened on line {ol} is still open when Nix reaches the `;` on line "
+                                f"{ln}. A `;` can't be inside a {what}, so the `{closer}` that ends it is missing.")
+        vars["fix_text"] = f"Add `{closer}` before the `;` on line {ln}:\n    {fixed}"
+    elif stack and lines[ln - 1][: col - 1].strip() == "":
+        # A `;` alone at the start of a line inside an open { } is the leftover end of `};`.
+        o, ol = stack[-1]
+        rep.others = [Loc(rep.loc.origin, ol)]
+        vars["explain_text"] = (f"The `{{` opened on line {ol} (`{lines[ol - 1].strip()}`) is still open when Nix "
+                                f"reaches the `;` on line {ln}. A `;` on its own is the end of `}};`, so the `}}` "
+                                f"that closes line {ol} is missing.")
+        vars["fix_text"] = f"Add `}}` before the `;` on line {ln}:\n    }};"
+    elif lines[ln - 1][: col - 1].rstrip().endswith(";"):
+        rep.title = "Doubled semicolon"
+        vars["explain_text"] = f"Line {ln} has two `;` in a row."
+        vars["fix_text"] = f"Remove one of the `;` on line {ln}."
+    else:
+        rep.title = "Unexpected semicolon"
+        vars["explain_text"] = (f"Nix found a `;` on line {ln} where it didn't expect one. Usually a doubled `;;`, "
+                                "a `;` inside a list, or a `;` right after `let ... in <value>`.")
+        vars["fix_text"] = f"Look at line {ln} and the line just above it."
+
+
+def attr_paths(lines: list[str]) -> list[tuple[tuple[str, ...], int, bool]]:
+    """Every `name = value;` line as (full name, line, opens a block), read line by line.
+
+    `services.pipewire = {` followed by `enable = true;` gives ("services", "pipewire", "enable").
+    A `{` that isn't a plain `name = {` (a function body, `in {`) starts a fresh scope, named "@<line>".
+    Lines inside lists, ( ), strings or comments are left out.
+    """
+    starts: list = []
+    scan_brackets("\n".join(lines), starts=starts)
+    opens: dict[int, tuple[str, ...]] = {}  # line of a `name = {` → the name it opens
+    out = []
+    for i, l in enumerate(lines):
+        st = [] if i == 0 else (starts[i - 1] if i - 1 < len(starts) else None)
+        if st is None or any(o != "{" for o, _ in st):
+            continue
+        code = l.split("#")[0]
+        if not (m := ASSIGN_RE.match(code)):
+            continue
+        base = (opens.get(st[-1][1]) or (f"@{st[-1][1]}",)) if st else ()
+        path = base + tuple(re.findall(r'"[^"]*"|[^.\s]+', m[1]))
+        block = code[m.end():].strip() == "{"
+        if block:
+            opens[i + 1] = path
+        out.append((path, i + 1, block))
+    return out
+
+
+def repeated_settings(lines: list[str]) -> list[tuple[int, int, str]]:
+    """(first line, repeat line, name) for every value set twice in one { } block, as Nix sees it:
+    two `name = {` blocks merge, but a value set twice, or a value next to a block of the same name, doesn't."""
+    seen: list[tuple[tuple[str, ...], int, bool]] = []
+    out = []
+    for p, ln, block in attr_paths(lines):
+        for q, ql, qblock in seen:
+            if p == q:
+                clash = not (block and qblock)
+            elif len(p) < len(q):
+                clash = q[:len(p)] == p and not block
+            else:
+                clash = p[:len(q)] == q and not qblock
+            if clash:
+                name = p[max((k + 1 for k, s in enumerate(p) if s.startswith("@")), default=0):]
+                out.append((ql, ln, ".".join(name)))
+                break
+        seen.append((p, ln, block))
+    return out
+
+
+def setting_value(line: str) -> str:
+    code = line.split("#")[0]
+    m = ASSIGN_RE.match(code)
+    return code[m.end():].strip().rstrip(";").strip() if m else ""
+
+
+def indent(line: str) -> int:
+    return len(line) - len(line.lstrip())
+
+
+def misindented(lines: list[str], ln: int) -> bool:
+    """Is the line, or a { } block around it, indented no deeper than the block it sits in? Pasted snippets often are."""
+    chain = [ln] + [o for _, o in reversed(open_at(lines, ln, 1))]
+    return any(a != b and indent(lines[a - 1]) <= indent(lines[b - 1]) for a, b in zip(chain, chain[1:]))
+
+
+def h_duplicate_attr(rep: Report, vars: dict, flake: Flake, rules, text: str) -> None:
+    """`attribute 'x' already defined at <first>`: the same setting twice in one { } block, often a pasted snippet."""
+    name = vars.get("name", "")
+    lines = read_lines(rep.loc.origin.real) if rep.loc else []
+    ln = rep.loc.line if rep.loc and rep.loc.line else 0
+    m = re.search(r"already defined at (?P<loc>«[^»]*»[^\s:]*|/[^\s:]+):(?P<line>\d+):(?P<col>\d+)", text)
+    fl = int(m["line"]) if m else 0
+    if m:
+        rep.others = [Loc(flake.origin(m["loc"]), fl, int(m["col"]))]
+    if not lines or not fl or not ln or max(fl, ln) > len(lines):
+        vars["explain_text"] = f"`{name}` is set twice in the same {{ }} block. Each name can only be set once there."
+        vars["fix_text"] = f"Delete one of the two `{name}` settings{f' (lines {fl} and {ln})' if fl and ln else ''}."
+        return
+
+    def which_to_delete(a: int, b: int) -> int:
+        """The copy that looks pasted in (indented wrong), else the later one."""
+        ma, mb = misindented(lines, a), misindented(lines, b)
+        return a if ma and not mb else b
+
+    def compare(a: int, b: int) -> str:
+        va, vb = setting_value(lines[a - 1]), setting_value(lines[b - 1])
+        if "{" in (va, vb) or not va or not vb:
+            return ""
+        return "same value" if va == vb else f"`{va}` vs `{vb}`"
+
+    w = len(str(max(fl, ln)))
+    vars["explain_text"] = (f"`{name}` is set twice in {rep.loc.origin.display}. Inside one {{ }} block each name can "
+                            f"only be set once, so Nix stops reading the file:\n"
+                            f"    {str(fl).rjust(w)} │ {lines[fl - 1].strip()}\n"
+                            f"    {str(ln).rjust(w)} │ {lines[ln - 1].strip()}")
+    notes = []
+    dele = which_to_delete(fl, ln)
+    keep = fl if dele == ln else ln
+    if misindented(lines, dele) and not misindented(lines, keep):
+        notes.append(f"Line {dele} is indented less than the code around it, like a snippet pasted in. "
+                     f"Line {keep} was there already.")
+        if dele != ln:  # show the copy to delete, not Nix's position
+            rep.others, rep.loc = [rep.loc], rep.others[0]
+    notes.append("`lib.mkForce` doesn't help here: Nix stops while reading the file, before NixOS looks at any option.")
+    vars["note"] = "\n\n".join(notes)
+
+    # Every repeat in the file (Nix stops at the first), as (line to delete, the other line, name, comparison).
+    repeats = [(which_to_delete(a, b), a, b, n, compare(a, b)) for a, b, n in repeated_settings(lines)]
+    repeats = [(d, a if d == b else b, n, c_) for d, a, b, n, c_ in repeats]
+    # A { } block whose settings all repeat others with the same value can go as a whole: a pasted copy.
+    safe = {d for d, _, _, c_ in repeats if c_ == "same value"}
+    paths = attr_paths(lines)
+    whole: list[tuple[int, int]] = []
+    for _, bl, is_block in paths:
+        if not is_block or any(s < bl <= e for s, e in whole):
+            continue
+        end = block_end(lines, bl)
+        leaves = [l for _, l, blk in paths if bl < l < end and not blk]
+        if leaves and all(l in safe for l in leaves):
+            whole.append((bl, end))
+
+    def in_whole(line: int) -> tuple[int, int] | None:
+        return next(((s, e) for s, e in whole if s <= line <= e), None)
+
+    cmp = compare(fl, ln)
+    if (blk := in_whole(dele)) and cmp == "same value":
+        s, e = blk
+        fix = (f"Delete lines {s}–{e}, the whole `{lines[s - 1].strip()}` block: every setting in it is "
+               f"already set the same way elsewhere.")
+    elif cmp == "same value":
+        fix = f"Both set it to `{setting_value(lines[fl - 1])}`. Delete line {dele}:\n    {lines[dele - 1].strip()}"
+    elif cmp:
+        fix = f"They disagree ({cmp}). Keep the one you want and delete the other (line {fl} or {ln})."
+    else:
+        fix = f"Combine them into one, or delete the copy you don't need (line {dele} looks like it)."
+    # The rest, which the next build would stop at, in file order; a whole repeated block is one item.
+    items: dict[int, str] = {}
+    for d, other, n, c_ in repeats:
+        if d in (fl, ln) or (blk := in_whole(dele)) and blk[0] <= d <= blk[1]:
+            continue
+        if blk := in_whole(d):
+            # indented lines aren't wrapped, so keep this short and explain "all repeats" below the list
+            items[blk[0]] = f"lines {blk[0]}–{blk[1]}: `{lines[blk[0] - 1].strip()} … }};`   (all repeats)"
+        else:
+            items[d] = f"line {d}: {lines[d - 1].strip()}   (`{n}`, also on line {other}" + (
+                "; same value)" if c_ == "same value" else f"; {c_}: keep the one you want)" if c_ else ")")
+    if items:
+        fix += (f"\n\nNix stops at the first repeat, and {rep.loc.origin.display} has more. "
+                f"Delete these too, or the next build stops there:")
+        for k in sorted(items)[:8]:
+            fix += f"\n    {items[k]}"
+        if len(items) > 8:
+            fix += f"\n    … and {len(items) - 8} more"
+        if any("(all repeats)" in t for t in items.values()):
+            fix += "\n\n\"All repeats\": every setting in that block is already set the same way elsewhere, so the whole block can go."
+    vars["fix_text"] = fix
+
+
+def block_end(lines: list[str], start: int) -> int:
+    """Line of the `}` closing the `{` that line `start` opens."""
+    for j in range(start + 1, len(lines) + 1):
+        if ("{", start) not in open_at(lines, j, len(lines[j - 1]) + 1):
+            return j
+    return len(lines)
+
+
+def nixpkgs_names(flake: Flake) -> list[str]:
+    """Top-level package names in your flake's own nixpkgs (only names: nothing gets evaluated)."""
+    path = flake.inputs.get("nixpkgs") or next((p for n, p in flake.inputs.items() if "nixpkgs" in n), None)
+    expr = f"builtins.attrNames (import {path} {{ }})" if path else "builtins.attrNames (import <nixpkgs> { })"
+    try:
+        out = run(["nix", "--extra-experimental-features", "nix-command", "eval", "--impure", "--json",
+                   "--expr", expr], timeout=60)
+        return json.loads(out.stdout) if out.returncode == 0 else []
+    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
+        return []
+
+
+def h_unknown_name(rep: Report, vars: dict, flake: Flake, rules, text: str) -> None:
+    name = vars.get("name", "")
+    lines = read_lines(rep.loc.origin.real) if rep.loc else []
+    line = rep.loc.line if rep.loc and rep.loc.line else 0
+    # Is the name inside a `with pkgs;` block? Then it can only be a package name.
+    in_with = any(re.search(r"\bwith\s+pkgs\s*;", l.split("#")[0]) for l in lines[max(0, line - 300):line])
+    names = nixpkgs_names(flake)
+    close = difflib.get_close_matches(name, names, n=4, cutoff=0.7) if names else []
+    if close:
+        rep.suggest = ", ".join(f"`{c}`" for c in close)
+    if in_with:
+        vars["note"] = (f"This list uses `with pkgs;`, so `{name}` has to be a package name, and nixpkgs has "
+                        f"no package called `{name}`.")
+        vars["fix_text"] = (f"Change it to `{close[0]}`, if that's what you meant." if close else
+                            f"Check the spelling: `nix search nixpkgs {name}` or search.nixos.org.")
+    else:
+        vars["note"] = ("Usually a typo, a package name without `pkgs.` in front, or a missing "
+                        "`let ... in` / function argument.")
+        vars["fix_text"] = (f"Change it to `pkgs.{close[0]}`, if that's what you meant." if close else
+                            f"Check the spelling of `{name}`. If it's a package, write `pkgs.{name}`.")
+
+
+def h_module_arg(rep: Report, vars: dict, flake: Flake, rules, text: str) -> None:
+    name = vars.get("name", "")
+    lines = read_lines(rep.loc.origin.real) if rep.loc else []
+    for i, l in enumerate(lines[:20]):
+        if m := re.match(r"^(\s*\{)([^}]*)(\}\s*:.*)$", l):
+            args = [a.strip() for a in m[2].split(",") if a.strip()]
+            new = [a for a in args if a != "..."] + [name] + (["..."] if "..." in args else [])
+            vars["header_old"] = l.strip()
+            vars["header_new"] = f"{m[1].strip()} {', '.join(new)} {m[3].strip()}"
+            vars["header_line"] = str(i + 1)
+            break
+    else:
+        vars["header_new"] = f"{{ config, pkgs, lib, {name}, ... }}:"
+    if name == "inputs" and flake.dir and not (flake.dir / "flake.nix").exists():
+        vars["note"] = ("`inputs` only exists in flake-based configs, and yours is a plain configuration.nix. "
+                        "Use the thing directly instead (e.g. `pkgs.foo`, or `import (fetchTarball …)`), or pass "
+                        "your own value with `_module.args.inputs = …;`.")
+    elif name in ("inputs", "osConfig", "specialArgs"):
+        vars["note"] = (f"`{name}` is not a standard module argument. It must also be passed in from "
+                        "flake.nix with `specialArgs = { inherit inputs; };` in `nixosSystem` (or "
+                        "`home-manager.extraSpecialArgs` for home-manager modules).")
+
+
+def h_assertion(rep: Report, vars: dict, flake: Flake, rules, text: str) -> None:
+    # Assertion messages usually name the options involved; find them in your files.
+    opts = re.findall(r"\b[a-zA-Z][\w-]*(?:\.(?:\"[^\"]+\"|[\w-]+)){2,}", vars.get("list", ""))
+    needles = []
+    for o in opts:
+        parts = re.findall(r'"[^"]*"|[^.]+', o)
+        needles += [".".join(parts[-2:]), ".".join(parts[-3:-1])]
+    if needles and (loc := flake.find(needles)):
+        rep.loc = loc
+
+
+REPLACEMENT_RE = re.compile(
+    r"\b(?:using|use|by|to)\s+[‘'`\"]?(?:pkgs\.)?(?!pkgs\.)(?P<r>[\w.+-]*\w)[’'`\"]?(?:\s+(?:instead|directly)|[.,;)]|$)",
+    re.I | re.M)
+
+
+def h_removed_pkg(rep: Report, vars: dict, flake: Flake, rules, text: str) -> None:
+    # Two ways to use a removed package: directly (pkgs.foo), or by enabling a module whose
+    # `package` option defaults to it (programs.foo). A module can't simply be renamed: the new
+    # package rarely has a module of its own, and the old module's settings don't carry over.
+    name, file = vars.get("name", ""), rep.loc.origin.display if rep.loc else "your config"
+    new = m["r"] if (m := REPLACEMENT_RE.search(vars.get("msg", ""))) and m["r"] != name else ""
+    line = read_lines(rep.loc.origin.real)[rep.loc.line - 1] if rep.loc and rep.loc.line else ""
+    module = vars.get("pkg_option", "")
+    hm = "home-manager" in rep.context
+    pkgs_opt = "home.packages" if hm else "environment.systemPackages"
+    if module and module in line:
+        vars["explain_text"] = (
+            f"`{module}` on line {rep.loc.line} turns on {'home-manager' if hm else 'NixOS'}'s "
+            f"{module.rsplit('.', 1)[-1]} module, which installs `pkgs.{name}`. After updating, nixpkgs no "
+            "longer has that package (Nix's reason is below). Your config still enables the module, so this "
+            "is an update you need to follow, not a bug.")
+        # its `enable = true` (on the same line, or inside the block before it closes)
+        lines, enable_ln = read_lines(rep.loc.origin.real), None
+        depth = len(open_at(lines, rep.loc.line, 1))  # by brackets: blocks aren't always indented
+        for i in range(rep.loc.line - 1, min(len(lines), rep.loc.line + 40)):
+            if i >= rep.loc.line and len(open_at(lines, i + 1, 1)) <= depth:
+                break
+            if re.search(r"\benable\s*=\s*true\b", lines[i]):
+                enable_ln = i + 1
+                break
+        off = (f"change `enable = true;` on line {enable_ln} to `enable = false;`" if enable_ln
+               else f"set `{module}.enable = false;`")
+        fix = (f"Quickest: {off}. That keeps your settings in place in case {name} comes back, or you want "
+               f"them for reference.\n\nFor good: remove the `{module} = {{ … }};` block from {file} (it starts "
+               f"on line {rep.loc.line}). Its settings are for {name} and won't carry over to another program.")
+        if new:
+            fix += (f"\n\nTo use {new} instead, install it as a plain package: `{pkgs_opt} = [ pkgs.{new} ];`. "
+                    f"Don't just rename the block to `{module.rsplit('.', 1)[0]}.{new}`: that only works if "
+                    f"{'home-manager' if hm else 'NixOS'} has a module for {new}, which most programs don't "
+                    "(check the options search first).")
+    else:
+        vars["explain_text"] = (
+            f"After updating, nixpkgs no longer has `{name}` under that name (Nix's reason is below). "
+            "Your config still uses the old name, so this is an update you need to follow, not a bug.")
+        where = f"on line {rep.loc.line} of {file}" if rep.loc and rep.loc.line else f"in {file}"
+        fix = (f"Replace `{name}` {where} with `{new}`." if new else f"Remove `{name}` {where}.") + (
+            "" if new else " The message above may name a replacement to use instead.")
+    vars["fix_text"] = fix
+
+
+def pkg_use(flake: Flake, pname: str) -> tuple[Loc | None, str]:
+    """Where your files pull a package in, and the package set it comes from (pkgs, pkgs-stable, ...)."""
+    head = re.escape(pname.split("-")[0])
+    set_re = rf"\b(?P<set>[\w-]*pkgs[\w-]*)\.{re.escape(pname)}(?![\w-])"  # pkgs.foo, pkgs-stable.foo, ...
+    # Drivers and modules pull packages in without naming them: nvidia-x11 comes from videoDrivers / hardware.nvidia.
+    use = flake.find([set_re, rf"videoDrivers\s*=.*\"{head}\"",
+                      rf"\b(?:hardware|programs|services)\.{head}(?![\w-])", rf"(?<![\w.\"-]){re.escape(pname)}(?![\w-])"],
+                     regex=True)
+    pset = m["set"] if use and (m := re.search(set_re, read_lines(use.origin.real)[use.line - 1])) else "pkgs"
+    return use, pset
+
+
+def h_unfree(rep: Report, vars: dict, flake: Flake, rules, text: str) -> None:
+    """An unfree package: show what pulls it in, and an `allowUnfree = false` or a predicate that blocks it."""
+    pkg, pname = vars.get("pkg", ""), vars.get("pname", "")
+    use, pset = pkg_use(flake, pname)
+    explain = f"`{pkg}` has a non-free license, and NixOS only installs free software unless you allow it."
+    if use:
+        explain += f" It's pulled in by {use.describe()}."
+
+    # `pkgs-stable = import inputs.nixpkgs-stable { ... }` is a separate copy of nixpkgs with its own config:
+    # `nixpkgs.config` in your modules doesn't reach it.
+    if pset != "pkgs" and (imp := flake.find([rf"(?<![\w-]){re.escape(pset)}\s*=\s*import\b"], regex=True)):
+        lines = read_lines(imp.origin.real)
+        end, depth = imp.line, 0
+        for i in range(imp.line - 1, min(len(lines), imp.line + 30)):
+            code = lines[i].split("#")[0]
+            depth += code.count("{") - code.count("}")
+            end = i + 1
+            if depth <= 0 and (i > imp.line - 1 or "{" in code):
+                break
+        block = {n: lines[n - 1].split("#")[0] for n in range(imp.line, end + 1)}
+        off_ln = next((n for n, l in block.items() if re.search(r"\ballowUnfree\s*=\s*false\b", l)), None)
+        pred_ln = next((n for n, l in block.items() if re.search(r"\ballowUnfreePredicate\s*=", l)), None)
+        at = lambda n: f"line {n} of {imp.origin.display}"
+        predicate = f'config.allowUnfreePredicate = pkg: builtins.elem (builtins.parseDrvName pkg.name).name [ "{pname}" ];'
+        explain += (f" `{pset}` is its own copy of nixpkgs, made with `import` on {at(imp.line)}. That copy has "
+                    "its own settings: `nixpkgs.config` in your modules doesn't reach it.")
+        rep.others = [use] if use else []
+        rep.context = ""
+        if off_ln:
+            rep.loc = Loc(imp.origin, off_ln)
+            explain += f" {at(off_ln)[0].upper() + at(off_ln)[1:]} sets `allowUnfree = false` for it, which blocks {pname}."
+            fix = (f"Change {at(off_ln)} to `true`, or keep it `false` and allow only this package, inside "
+                   f"that same `import`:\n    {predicate}")
+        elif pred_ln:
+            rep.loc = Loc(imp.origin, pred_ln)
+            explain += f" Its `allowUnfreePredicate` ({at(pred_ln)}) doesn't include {pname}."
+            fix = f"Add \"{pname}\" to the list in the `allowUnfreePredicate` on {at(pred_ln)}."
+        else:
+            rep.loc = imp
+            explain += " It doesn't allow unfree packages, even if your system does."
+            fix = (f"Add `config.allowUnfree = true;` inside the `import {{ … }}` on {at(imp.line)}, or only "
+                   f"this package:\n    {predicate}")
+        vars["explain_text"], vars["fix_text"] = explain, fix
+        return
+
+    # the module option (`nixpkgs.config.allowUnfree`, or `allowUnfree` nested in `nixpkgs.config = { }`),
+    # not an `import nixpkgs { config.allowUnfree = false; }`, which only affects that copy
+    off = flake.find([r"\bnixpkgs\.config\.allowUnfree\s*=\s*false\b", r"^\s*allowUnfree\s*=\s*false\b"], regex=True)
+    pred = flake.find([r"\ballowUnfreePredicate\s*="], regex=True)
+    predicate = f'nixpkgs.config.allowUnfreePredicate = pkg: builtins.elem (lib.getName pkg) [ "{pname}" ];'
+    hm = "(With home-manager and `useGlobalPkgs = false`, set it in your home-manager config too.)"
+    rep.loc, rep.others = (off or use), [l for l in (use,) if l and off]
+    if rep.loc:
+        rep.context = ""  # the option nixpkgs was evaluating (tmpfiles, system-path, ...) only adds noise now
+    if off:
+        explain += f" {off.describe()} sets `allowUnfree = false`, which blocks it."
+        fix = (f"Change line {off.line} of {off.origin.display} to `true`, or keep it `false` and allow only "
+               f"this package:\n    {predicate}")
+    elif pred:
+        explain += f" Your `allowUnfreePredicate` ({pred.describe()}) doesn't include it."
+        fix = f"Add \"{pname}\" to the list in your `allowUnfreePredicate` on line {pred.line} of {pred.origin.display}."
+    else:
+        fix = f"Allow all unfree packages:\n    nixpkgs.config.allowUnfree = true;\nor only this one:\n    {predicate}\n{hm}"
+    vars["explain_text"], vars["fix_text"] = explain, fix
+
+
+def h_insecure(rep: Report, vars: dict, flake: Flake, rules, text: str) -> None:
+    """An insecure package: quote nixpkgs' reasons, and whether you or a dependency pull it in."""
+    pkg, pname = vars.get("pkg", ""), vars.get("pname", "")
+    m = re.search(r"Known issues:[ \t]*\n((?:[ \t]*- .*\n?)+)", text)
+    issues = [l.strip()[2:] for l in m[1].splitlines()] if m else []
+    # nixpkgs also marks packages that upstream stopped working on: no fix is coming, so permitting them only delays it
+    dead = re.search(r"discontinued|abandoned|unmaintained|no longer (?:maintained|developed)|end[ -]of[ -]life",
+                     " ".join(issues), re.I)
+    use, pset = pkg_use(flake, pname)
+
+    explain = f"nixpkgs refuses to build `{pkg}` without your permission, because it is marked insecure."
+    if issues:
+        explain += " The reason it gives:\n\n" + "\n".join(f"    - {i}" for i in issues) + "\n\n"
+    else:
+        explain += " "
+    if use:
+        rep.loc, rep.others, rep.context, rep.blame = use, [], "", "you"
+        explain += f"It's pulled in by {use.describe()}."
+    else:
+        explain += "Nothing in your files names it, so something you use depends on it."
+    permit = f'nixpkgs.config.permittedInsecurePackages = [ "{pkg}" ];'
+    if pset != "pkgs":
+        permit = f'config.permittedInsecurePackages = [ "{pkg}" ];  (in the `import` that makes `{pset}`)'
+
+    if dead and use:
+        fix = (f"It won't get fixes any more, so remove it from line {use.line} of {use.origin.display} "
+               "and use a replacement.")
+    elif dead:
+        fix = "It won't get fixes any more. Find the package that depends on it and replace or remove that."
+    elif use:
+        fix = (f"Remove it from line {use.line} of {use.origin.display}, or wait for an update that fixes it "
+               "(then update your flake).")
+    else:
+        fix = "Wait for an update that fixes it (then update your flake), or remove the package that depends on it."
+    fix += (f"\n\nTo use it anyway and accept the risk:\n    {permit}\n"
+            "That allows only this exact version. When it changes, the build stops again and the entry needs updating.")
+    vars["explain_text"], vars["fix_text"] = explain, fix
+
+
+DRV_FRAME_RE = re.compile(r"while evaluating derivation '(?P<name>[^']+)'")
+VERSION_RE = re.compile(r"-\d[\w.+~-]*$")
+LANG_PREFIX_RE = re.compile(r"^python[\d.]+-")
+
+
+def drv_attr(drv: str) -> str:
+    """The attribute for a derivation name: `python3.14-fastmcp-3.4.7` is `python3Packages.fastmcp`."""
+    name = VERSION_RE.sub("", drv)
+    return "python3Packages." + LANG_PREFIX_RE.sub("", name) if LANG_PREFIX_RE.match(name) else name
+
+
+def older_nixpkgs(flake: Flake) -> str | None:
+    """The nixpkgs your flake.lock pinned before the current one (from git history), as a flake URL."""
+    def locked(src: str) -> dict | None:
+        try:
+            lock = json.loads(src)
+            node = lock["nodes"]["root"]["inputs"]["nixpkgs"]
+            return lock["nodes"][node]["locked"] if isinstance(node, str) else None
+        except (json.JSONDecodeError, KeyError, TypeError):
+            return None
+
+    now = locked("\n".join(read_lines(flake.dir / "flake.lock"))) if flake.dir else None
+    if not now:
+        return None
+    # newest first; an update that isn't committed yet makes the first one the old pin
+    for commit in git(flake, "log", "-n", "20", "--format=%H", "--", "flake.lock").split():
+        old = locked(git(flake, "show", f"{commit}:flake.lock"))
+        if old and old.get("rev") != now.get("rev"):
+            if old.get("type") == "github" and old.get("rev"):
+                return f"github:{old['owner']}/{old['repo']}/{old['rev']}"
+            return None
+    return None
+
+
+def h_broken(rep: Report, vars: dict, flake: Flake, rules, text: str) -> None:
+    """A broken package: nixpkgs' reason, what in your files pulls it in (often a package that depends on it),
+    and how to get past it: remove that, take it from the nixpkgs you had before, or wait for a fix."""
+    pkg = vars.get("pkg", "")
+    name = drv_attr(pkg)
+    # Nix names each derivation it was evaluating, outermost first (man-paths > mcp-nixos > fastmcp). The first
+    # one your files name is what you installed. Unversioned ones (man-paths, system-path, etc) are NixOS wrappers.
+    chain = [d for d in dict.fromkeys(m["name"] for m in DRV_FRAME_RE.finditer(text))
+             if d != pkg and VERSION_RE.search(d) and not d.startswith("nixos-system-")]
+    top, via = name, []
+    for i, d in enumerate(chain):
+        if use := pkg_use(flake, drv_attr(d).split(".")[-1])[0]:
+            top, via = drv_attr(d), [drv_attr(x) for x in chain[i + 1:]]
+            break
+    else:
+        use = pkg_use(flake, name.split(".")[-1])[0]
+        if not use and chain:  # installed some way your files don't spell out: the trace still says through what
+            top, via = drv_attr(chain[0]), [drv_attr(x) for x in chain[1:]]
+
+    # the package's own `broken = …` line says when it's broken (e.g. `lib.versionAtLeast mcp.version "2"`)
+    cond = None
+    if m := re.search(rf"[‘']{re.escape(pkg)}[’'] in (?P<path>\S+?\.nix):\d+", text):
+        lines = read_lines(flake.origin(m["path"]).real)
+        if b := next((re.match(r"\s*broken\s*=\s*(.+?);?\s*$", l.split("#")[0]) for l in lines
+                      if re.match(r"\s*broken\s*=\s*\S", l)), None):
+            cond = b[1] if b[1] != "true" else None
+
+    explain = f"nixpkgs has marked `{pkg}` as broken, so it refuses to evaluate it."
+    if cond:
+        explain += f" Its package marks it broken when `{cond}`, which is true in the nixpkgs you have now."
+    else:
+        explain += " That usually means it fails to build, or doesn't work, with the packages around it."
+    needs = ", which needs ".join(f"`{v}`" for v in via + [name])
+    if use and top != name:
+        explain += f" Nothing in your files names it: `{top}` ({use.describe()}) needs {needs}."
+    elif use:
+        explain += f" It's pulled in by {use.describe()}."
+    elif top != name:
+        explain += f" Nothing in your files names it, but Nix reached it through `{top}`, which needs {needs}."
+    else:
+        explain += " Nothing in your files names it, so something you use depends on it."
+    if use:
+        rep.loc, rep.others, rep.context = use, [], ""
+
+    where = f" on line {use.line} of {use.origin.display}" if use else ""
+    known = use or top != name
+    old = older_nixpkgs(flake)
+    fix = [f"Remove `{top}`{where.replace(' on ', ' from ', 1)} for now." if known
+           else f"Remove the package that depends on `{name}` for now."]
+    if known:
+        fix.append(
+            f"Or keep `{top}` from an older nixpkgs"
+            + (", the one you had before your last update" if old else "") + ". Add it as a second flake input:\n"
+            f"    inputs.nixpkgs-pinned.url = \"{old or 'github:NixOS/nixpkgs/<an older revision>'}\";\n"
+            f"and use it in place of `{top}`{where}:\n"
+            f"    inputs.nixpkgs-pinned.legacyPackages.${{pkgs.stdenv.hostPlatform.system}}.{top}\n"
+            "(`inputs` has to reach that module, for example through `specialArgs`.)")
+    fix.append(f"Or wait for nixpkgs to fix `{name}`, then update your flake"
+               + (" and put it back." if known else "."))
+    if "has problems" in text:
+        k = m["k"] if (m := re.search(r"^\s*(?P<k>[^\s=]+)\.broken\s*=", text, re.M)) else name
+        anyway = f'nixpkgs.config.problems.handlers.{k}.broken = "warn";'
+    else:
+        anyway = "nixpkgs.config.allowBroken = true;"
+    fix.append(f"To try it anyway:\n    {anyway}\nA package is marked broken because it fails to build or "
+               "doesn't work, so this rarely gets you further.")
+    vars["explain_text"], vars["fix_text"] = explain, "\n\n".join(fix)
+
+
+def git(flake: Flake, *args: str) -> str:
+    if not flake.dir:
+        return ""
+    try:
+        return subprocess.run(["git", "-C", str(flake.dir), *args], capture_output=True, timeout=10
+                              ).stdout.decode(errors="replace")
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+def import_roots(flake: Flake) -> list[str]:
+    """Folders that import-tree loads, from `import-tree ./modules` in flake.nix."""
+    src = "\n".join(read_lines(flake.dir / "flake.nix")) if flake.dir else ""
+    return [r.rstrip("/") for r in re.findall(r"import-tree\s*\)?\s*\[?\s*\./([\w./-]+)", src)]
+
+
+def h_missing_module(rep: Report, vars: dict, flake: Flake, rules, text: str) -> None:
+    """`config.flake.modules.nixos.foo` where no loaded file sets foo: usually its file was moved,
+    deleted, never `git add`-ed, or sits outside the folders import-tree loads."""
+    name, cls = vars.get("name", ""), vars.get("class") or vars.get("class2", "")
+    prefix = vars.get("prefix", "")
+    # what a definition looks like: `flake.modules.nixos.foo =` or `flake.nixosModules.foo =`
+    defpath = re.sub(r"^(?:self|flake)\.", "", prefix)
+    shown = f"flake.{defpath}.{name}"
+    def_re = re.compile(rf"\b{re.escape(defpath)}\.{re.escape(name)}\s*=(?!=)")
+    kind = {"nixos": "NixOS", "homeManager": "home-manager", "home": "home-manager",
+            "darwin": "nix-darwin"}.get(cls, cls)
+    use = f"line {rep.loc.line} of {rep.loc.origin.display}" if rep.loc and rep.loc.line else "your config"
+    repo = "~/" + r if flake.dir and (r := under(flake.dir, Path.home())) else str(flake.dir or ".")
+    roots = import_roots(flake)
+    where = " and ".join(", ".join(f"./{r}" for r in roots).rsplit(", ", 1))
+    vars["explain_text"] = f"{use[0].upper() + use[1:]} uses the {kind} module `{name}`, but no file sets `{shown}`."
+    rep.context = ""  # whichever option Nix was evaluating (assertions, ...) when it hit the import is incidental
+    line = read_lines(rep.loc.origin.real)[rep.loc.line - 1].strip() if rep.loc and rep.loc.line else ""
+    ref = m[0] if (m := re.search(rf"[\w.]*\.{re.escape(name)}\b", line)) else name
+    drop = (f"If you meant to drop the module, remove {use}." if line == ref
+            else f"If you meant to drop the module, remove `{ref}` from {use}.")
+
+    # Other modules of this kind, for "did you mean"
+    names = set()
+    all_re = re.compile(rf"\b{re.escape(defpath)}\.([\w-]+)\s*=(?!=)")
+    for f in flake.files():
+        for l in read_lines(f):
+            names.update(all_re.findall(l))
+    names.discard(name)
+    close = difflib.get_close_matches(name, sorted(names), n=3, cutoff=0.7)
+
+    # 1. A file in the flake folder defines it, but Nix doesn't load that file.
+    if loc := flake.find([def_re.pattern], regex=True):
+        rel = loc.origin.display
+        rep.others = [loc]
+        if rel in git(flake, "ls-files", "--others", "--exclude-standard").splitlines():
+            vars["explain_text"] += (f" {rel} sets it, but that file isn't added to git, and flakes only see "
+                                     "files git knows about.")
+            vars["fix_text"] = f"    git -C {repo} add {rel}\n(It doesn't have to be committed, just added.)"
+        elif roots and (not any(rel == r or rel.startswith(r + "/") for r in roots)
+                        or any(p.startswith("_") for p in Path(rel).parts)):
+            vars["explain_text"] += (f" {rel} (line {loc.line}) sets it, but import-tree only loads .nix files "
+                                     f"under {where}, and skips any path with a part starting with `_`. "
+                                     "So that file is never read.")
+            vars["fix_text"] = f"Move {rel} into {'./' + roots[0]} (any subfolder works). {drop}"
+        else:
+            vars["explain_text"] += (f" {rel} sets it on line {loc.line}, yet Nix didn't see it. Check that "
+                                     "the definition isn't inside a condition, and that the file is imported.")
+            vars["fix_text"] = f"Look at line {loc.line} of {rel}."
+        return
+
+    # 2. A file that git knows defined it is gone. Step 1 searched every .nix file in the folder, tracked
+    #    or not, so it wasn't just moved within the flake: it was deleted, or moved out of the folder.
+    for l in git(flake, "status", "--porcelain", "--no-renames").splitlines():
+        path = l[3:].strip().strip('"')
+        if "D" not in l[:2] or not path.endswith(".nix"):
+            continue
+        old = git(flake, "show", f":{path}") or git(flake, "show", f"HEAD:{path}")
+        if def_re.search(old):
+            vars["explain_text"] += (f" {path} used to set it, but that file was deleted since your last commit, "
+                                     f"and no other file in {repo} sets it now.")
+            vars["fix_text"] = (f"Bring the file back from git:\n"
+                                f"    git -C {repo} checkout HEAD -- {path}\n\n{drop}")
+            return
+
+    # 3. Deleted in an earlier commit.
+    out = git(flake, "log", "-1", "--diff-filter=D", "--name-only", "--format=%h %s", "-S", f"{defpath}.{name}")
+    if out.strip():
+        head, *files = [l for l in out.splitlines() if l.strip()]
+        commit, _, subject = head.partition(" ")
+        path = files[0] if files else "its file"
+        vars["explain_text"] += f" {path} used to set it, but it was deleted in commit {commit} (“{subject}”)."
+        vars["fix_text"] = f"Bring it back:\n    git -C {repo} checkout {commit}^ -- {path}\n\n{drop}"
+        return
+
+    # 4. A new file named after the module, not added to git yet (and not defining it, or step 1 had found it).
+    untracked = [u for u in git(flake, "ls-files", "--others", "--exclude-standard", "*.nix").splitlines()]
+    stem = lambda u: Path(u).stem.lower().replace("_", "-")
+    named = [u for u in untracked if stem(u) == name.lower()] or [
+        u for u in untracked if difflib.get_close_matches(name.lower(), [stem(u)], n=1, cutoff=0.8)
+        or name.lower() in stem(u)]
+    if named:
+        rel = named[0]
+        rep.others = [Loc(flake.origin(str(flake.dir / rel)), 1)]
+        vars["explain_text"] += (f" {rel} looks like it's meant to, but it isn't added to git, so Nix can't see it "
+                                 f"(flakes only see files git knows about). It also doesn't set `{shown}` yet, so "
+                                 "adding it to git alone won't fix this.")
+        vars["fix_text"] = (f"In {rel}, define the module:\n    {{ {shown} = {{ ... }}: {{ }}; }}\nthen add the "
+                            f"file to git (it doesn't have to be committed):\n    git -C {repo} add {rel}\n\n{drop}")
+        return
+
+    # 5. Never defined: a typo, or a module still to be written.
+    if close:
+        rep.suggest = ", ".join(f"`{c}`" for c in close)
+        vars["fix_text"] = f"Change `{name}` to `{close[0]}`, if that's what you meant. {drop}"
+    else:
+        vars["fix_text"] = (f"Create a file under {'./' + roots[0] if roots else 'your modules folder'} that sets "
+                            f"`{shown} = {{ ... }};`. {drop}")
+    vars["note"] = "It isn't a package, so `nix search` won't find it: modules like this are defined in your own files."
+
+
+HM_CLOBBER_RE = re.compile(r"Existing file '(?P<a>[^']+)' would be clobbered(?: by backing up '(?P<b>[^']+)')?$", re.M)
+
+
+def h_hm_file(rep: Report, vars: dict, flake: Flake, rules, text: str) -> None:
+    """Files in the way of home-manager's links. home-manager lists every one, so explain them all,
+    and say how to rerun it: a switch with no config change doesn't restart its service."""
+    tilde = lambda p: "~/" + r if (r := under(Path(p), Path.home())) else p
+    hits = [(m["b"], m["a"]) if m["b"] else (m["a"], None) for m in HM_CLOBBER_RE.finditer(text)]
+    hits = [h for h in dict.fromkeys(hits) if (h[1] is not None) == ("backup" in vars)] or [(vars["file"], vars.get("backup"))]
+    files, backups = [tilde(f) for f, _ in hits], [tilde(b) for _, b in hits if b]
+    join = lambda xs: " and ".join(", ".join(f"`{x}`" for x in xs).rsplit(", ", 1))
+    vars["files"], vars["backups"] = join(files), join(backups)
+    many = len(files) > 1
+    vars["already"] = "normal files are already there" if many else "a normal file is already there"
+    vars["it"], vars["it_file"] = ("them", "those files") if many else ("it", "the file")
+    vars["moves"] = "\n".join(f"    mv {f} {f}.old" for f in files)
+    vars["removes"] = "\n".join(f"    rm {b}" for b in backups)
+    vars["backup_age"] = ""
+    try:
+        when = time.localtime(Path(hits[0][1]).stat().st_mtime) if hits[0][1] else None
+        if when:
+            vars["backup_age"] = " (from " + time.strftime("%B ", when) + str(when.tm_mday) + (
+                time.strftime(", %Y", when) if when.tm_year != time.localtime().tm_year else "") + ")"
+    except OSError:
+        pass
+    if len(hits) > 1:
+        vars["backup_age"] = vars["backup_age"].replace(" (from", " (the first from")
+    unit = (m[1] if (m := re.search(r"\b(home-manager-[\w@-]+)\.service\b", text)) else
+            f"home-manager-{os.environ.get('USER', '$USER')}") + ".service"
+    vars["rerun"] = f"sudo systemctl restart {unit}"
+    vars["rerun_note"] = ("(`nh os switch` alone won't retry it if nothing in your config changed: NixOS only "
+                          "restarts the home-manager service when its config does.)")
+
+
+def build_log_file(drv: str) -> Path | None:
+    name = Path(drv).name
+    return next((f for f in (NIX_LOG_DIR / name[:2] / (name[2:] + ".bz2"), NIX_LOG_DIR / name[:2] / name[2:])
+                 if f.exists()), None)
+
+
+def read_build_log(drv: str) -> str | None:
+    if not (f := build_log_file(drv)):
+        return None
+    try:
+        data = f.read_bytes()
+        return (bz2.decompress(data) if f.suffix == ".bz2" else data).decode(errors="replace")
+    except (OSError, ValueError):
+        return None
+
+
+# A failed builder's last lines say why it stopped. A build Nix cut off (because another one failed, or Ctrl-C)
+# just ends, often with nothing in it at all.
+BUILD_ERROR_RE = re.compile(
+    r"\berror\b|\bfail(?:ed|ure|s)?\b|traceback|\bfatal\b|panicked|no such file|not found|undefined reference"
+    r"|\*\*\*|exit (?:code|status) [1-9]|segmentation fault|\bkilled\b|\baborted\b|\bassert", re.I)
+
+
+def log_shows_failure(log: str) -> bool:
+    return any(BUILD_ERROR_RE.search(l) for l in [l for l in log.splitlines() if l.strip()][-25:])
+
+
+# derivations NixOS and home-manager make to gather what you install, by the option that fills them
+COLLECTORS = {
+    "system-path": "environment.systemPackages",
+    "user-environment": "users.users.<name>.packages",
+    "home-manager-path": "home.packages",
+    "home-manager-files": "home.file",
+    "etc": "environment.etc",
+    "man-paths": "man pages",
+}
+
+
+def why_depends(root: str, drv: str) -> list[str]:
+    """Derivation names from root down to drv, from `nix why-depends` (both .drv files must still exist)."""
+    try:
+        p = run(["nix", "--extra-experimental-features", "nix-command", "why-depends", "--derivation", root, drv],
+                timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    return re.findall(r"/nix/store/[a-z0-9]{32}-(\S+?)\.drv", ANSI_RE.sub("", p.stdout)) if p.returncode == 0 else []
+
+
+def made_by_module(flake: Flake, name: str) -> Loc | None:
+    """The NixOS or home-manager module (in a flake input) that makes a derivation called `name`."""
+    needle = f'"{name}"'
+    for base in flake.inputs.values():
+        for d in (base / "modules", base / "nixos" / "modules"):
+            for f in sorted(d.rglob("*.nix")) if d.is_dir() else []:
+                for i, line in enumerate(read_lines(f)):
+                    if needle in line and not line.lstrip().startswith("#"):
+                        return Loc(flake.origin(str(f)), i + 1)
+    return None
+
+
+def trace_build(flake: Flake, text: str, drv: str) -> tuple[str, Loc | None, str, str, str]:
+    """What needs a failed build: a note with the chain, the line in your files to act on, what that line
+    is ("package", "option" or "") with its name, and the input whose module made the failed one."""
+    roots = (re.findall(r"Cannot build '(/nix/store/\S+?\.drv)'\.\s*Reason: \d+ dependenc", text)
+             + re.findall(r"dependencies of derivation '(/nix/store/\S+?\.drv)' failed", text))
+    root = next((r for r in roots if "-nixos-system-" in r), roots[-1] if roots else None)
+    chain = why_depends(root, drv) if root and root != drv else []
+    if len(chain) < 2:
+        return "", None, "", "", ""
+    failed, *outer = reversed(chain)  # innermost first from here
+    system = chain[0].startswith("nixos-system-")
+    shown = " → ".join(f"{n} ({COLLECTORS[n]})" if n in COLLECTORS else n for n in chain[1 if system else 0:])
+    note = f"Your system needs it through {shown}." if system else f"It's needed through {shown}."
+    # a package your files install that needs it (outermost first, as in the broken-package handler)
+    pkgs_ = [n for n in reversed(outer) if n not in COLLECTORS and VERSION_RE.search(n)
+             and not n.startswith("nixos-system-")]
+    for i, n in enumerate(pkgs_):
+        if use := pkg_use(flake, drv_attr(n).split(".")[-1])[0]:
+            via = [drv_attr(x) for x in pkgs_[i + 1:]] + [VERSION_RE.sub("", failed)]
+            return (note + f" `{drv_attr(n)}` ({use.describe()}) needs " + ", which needs ".join(f"`{v}`" for v in via)
+                    + "."), use, "package", drv_attr(n), ""
+    # else a module made it: find the module, and where you turn that module on
+    for n in [failed, *outer]:
+        if n in COLLECTORS or n.startswith("nixos-system-"):
+            break
+        if mod := made_by_module(flake, n):
+            src = "\n".join(read_lines(mod.origin.real))
+            opt = m[1] if (m := re.search(r"\bcfg\s*=\s*config\.([\w.]+)\s*;", src)) else None
+            path = mod.origin.display.split(": ", 1)[-1]
+            note += f" `{n}` is made by {mod.origin.label}'s {path} (line {mod.line})"
+            if opt and (on := flake.find([rf"\b{re.escape(opt)}\b"], regex=True)):
+                return note + f", for `{opt}`, which you set on {on.describe()}.", on, "option", opt, mod.origin.label
+            return (note + (f", for `{opt}`." if opt else "."), None, "option" if opt else "", opt or "",
+                    mod.origin.label)
+    return note, None, "", "", ""
+
+
+def h_build(rep: Report, vars: dict, flake: Flake, rules: list[Rule], text: str) -> None:
+    drv = vars.get("drv", "")
+    name = re.sub(r"^/nix/store/[a-z0-9]{32}-|\.drv$", "", drv)
+    vars["name"] = name
+    vars["pname"] = pname = re.sub(r"-\d[\w.+~-]*$", "", name)
+    chain_note, at, kind, what, made_in = trace_build(flake, text, drv) if drv else ("", None, "", "", "")
+    log = read_build_log(drv) if drv else None
+    if log is None:
+        log = "\n".join(LOG_LINE_RE.findall(text))
+    log = clean(log)
+    rep.log_tail = [l for l in log.splitlines() if l.strip()][-15:]
+    if log.strip() and (cause := best_match(rules, [Block(log, log, None)], log, "log")):
+        c_rule, c_m, _ = cause
+        cvars = {k: v for k, v in c_m.groupdict().items() if v is not None} | {"name": name, "pname": pname}
+        rep.cause = Report(title=c_rule.title, rule_id=c_rule.id, blame=c_rule.blame,
+                           explain=render(c_rule.explain, cvars), fix=render(c_rule.fix, cvars))
+        if c_rule.blame in ("system", "you"):
+            rep.blame = c_rule.blame
+    # Is this a package you wrote yourself?
+    own = flake.find([rf"""(?:\bp?name\s*=\s*|\b(?:runCommand\w*|write\w+|mkDerivation|buildPythonApplication)\s+)["']{re.escape(pname)}["'-]"""],
+                     regex=True)
+    # Or a nixpkgs package you changed (`pkgs.foo.overrideAttrs`, an overlay's `prev.foo.override`)?
+    changed = None if own else flake.find(
+        [rf"\b{re.escape(pname)}\.(?:overrideAttrs|overrideDerivation|override)\b"], regex=True)
+    if own:
+        rep.loc = own
+        if rep.blame == "unknown":
+            rep.blame = "you"
+        vars["owner_note"] = f"`{pname}` is a package defined in your own config ({own.describe()})."
+        vars["advice"] = "The cause is in the end of the build log above: your build script or its source."
+    elif changed:
+        rep.loc = changed
+        if rep.blame in ("unknown", "upstream"):
+            rep.blame = "you"
+        how = re.search(r"\.(override\w*)", read_lines(changed.origin.real)[changed.line - 1])[1]
+        note = (f"`{pname}` comes from nixpkgs, but you change it with `{how}` on {changed.describe()}. "
+                "Plain nixpkgs packages are built and tested before they reach you, so the failure most "
+                "likely comes from your change (patches, build phases, hooks, version or src).")
+        # The log's last lines often come straight from the override (an echo, a patch name, a command).
+        lines = read_lines(changed.origin.real)
+        block = range(changed.line - 1, min(len(lines), changed.line + 40))
+        for out in reversed(rep.log_tail[-5:]):
+            text = re.sub(r"^\s*>\s?", "", out).strip()
+            if len(text) < 10:
+                continue
+            if hit := next((i for i in block if text in lines[i] and not lines[i].lstrip().startswith("#")), None):
+                rep.loc = Loc(changed.origin, hit + 1)
+                note += f" The build log's line `{text}` comes from line {hit + 1} of your file."
+                break
+        vars["owner_note"] = note
+        vars["advice"] = (f"Look at your `{how}` on {changed.describe()}. To confirm, take the change out: if "
+                          f"`{pname}` then builds, the cause is in what you changed.")
+    else:
+        rep.loc = None
+        if rep.blame == "unknown":
+            rep.blame = "upstream"
+        vars["owner_note"] = (f"`{pname}` is not defined in your config, so it comes from nixpkgs or "
+                              "another input. This is usually not caused by anything you typed.")
+        if kind == "package":
+            remove = f"remove `{what}` from line {at.line} of {at.origin.display}"
+        elif kind == "option" and at:
+            remove = f"turn off `{what}` (line {at.line} of {at.origin.display})"
+        elif kind == "option":
+            remove = f"turn off `{what}`"
+        else:
+            remove = "remove the package"
+        rep.loc = at
+        tracker = {"home-manager": "github.com/nix-community/home-manager/issues"}.get(
+            made_in, "github.com/NixOS/nixpkgs/issues")
+        vars["advice"] = (f"Check whether it's already reported ({tracker}, search "
+                          f"\"{pname}\"). Meanwhile, go back to your previous flake.lock "
+                          f"(`git checkout flake.lock`) or {remove} for now.")
+    if chain_note:
+        vars["owner_note"] = chain_note + "\n\n" + vars["owner_note"]
+    rep.others = []
+
+
+# ─── wrong kind of value for an option ──────────────────────────────────────
+
+def value_kind(v: str) -> str:
+    """What kind of value Nix printed under "Definition values:"."""
+    v = v.strip()
+    if v.startswith(('"', "''")):
+        return "string"
+    if v.startswith("["):
+        return "list"
+    if v.startswith("{"):
+        return "attribute set"
+    if v in ("true", "false"):
+        return "boolean"
+    if re.fullmatch(r"-?\d+", v):
+        return "integer"
+    if re.fullmatch(r"-?\d+\.\d*", v):
+        return "number"
+    if v == "null":
+        return "null"
+    if v.startswith(("<derivation", "«derivation")):
+        return "package"
+    if v.startswith(("<function", "«lambda")):
+        return "function"
+    if v.startswith("/"):
+        return "path"
+    return ""
+
+
+def wanted_kind(desc: str) -> str:
+    """The kind an option's type description asks for, ignoring a leading "null or"."""
+    d = re.sub(r"^(?:null or )+", "", desc)
+    if d.startswith("list of"):
+        return "list"
+    if d.startswith(("attribute set", "submodule", "lazy attribute set")):
+        return "attribute set"
+    if d.startswith("one of "):
+        return "enum"
+    if d == "boolean":
+        return "boolean"
+    if "integer" in d.split(" or ")[0]:
+        return "integer"
+    if d == "package":
+        return "package"
+    if d.startswith("path"):
+        return "path"
+    if re.match(r"(?:non-empty |single-line |strings? |string\b|lines\b|separated string|Concatenated string)", d):
+        return "string"
+    return ""
+
+
+def enum_values(desc: str) -> list[str]:
+    """The allowed values of `one of "a", "b", 3`, as Nix prints them (strings keep their quotes)."""
+    rest = re.sub(r"^(?:null or )*one of ", "", desc)
+    return re.findall(r'"(?:[^"\\]|\\.)*"|[^,\s]+', rest)
+
+
+def edit_distance(a: str, b: str) -> int:
+    """Levenshtein distance, counting a swap of two neighbouring letters as one edit."""
+    prev2, prev = [], list(range(len(b) + 1))
+    for i in range(1, len(a) + 1):
+        cur = [i] + [0] * len(b)
+        for j in range(1, len(b) + 1):
+            cur[j] = min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] != b[j - 1]))
+            if i > 1 and j > 1 and a[i - 1] == b[j - 2] and a[i - 2] == b[j - 1]:
+                cur[j] = min(cur[j], prev2[j - 2] + 1)
+        prev2, prev = prev, cur
+    return prev[-1]
+
+
+def closest_value(given: str, allowed: list[str]) -> str | None:
+    """The allowed value `given` was most likely meant to be: same letters in another case first,
+    then one or two typos away (one for short words), if exactly one value is that close."""
+    bare = lambda v: v[1:-1] if len(v) > 1 and v[0] == v[-1] == '"' else v
+    g = bare(given).lower()
+    same = [a for a in allowed if bare(a).lower() == g]
+    if len(same) == 1:
+        return same[0]
+    near = [(edit_distance(g, bare(a).lower()), a) for a in allowed]
+    best = min((d for d, _ in near), default=99)
+    limit = 1 if len(g) <= 4 else 2
+    hits = [a for d, a in near if d == best]
+    return hits[0] if best <= limit and len(hits) == 1 else None
+
+
+def h_option_type(rep: Report, vars: dict, flake: Flake, rules, text: str) -> None:
+    """Say what the option wants, what it got, and the corrected line when that's clear."""
+    option, desc = vars.get("option", ""), vars.get("type", "")
+    defs = textwrap.dedent(vars.get("definitions", ""))
+    m = re.match(r"- In `[^']+':\s*(?P<v>.*(?:\n(?!- In ).*)*)", defs.strip())
+    given = textwrap.dedent(m["v"]).strip() if m else ""
+    got, want = value_kind(given), wanted_kind(desc)
+    one_line = " ".join(given.split())
+    shown = f" (`{one_line}`)" if one_line and len(one_line) < 40 else ""
+    vars["explain_text"] = f"`{option}` expects {desc}, but you gave it {('a ' + got) if got else 'something else'}{shown}."
+    generic = ("Change the value on line {line} to the expected kind. What you gave:\n" + vars.get("definitions", ""))
+    vars["fix_text"] = generic.replace("{line}", str(rep.loc.line) if rep.loc and rep.loc.line else "?")
+
+    # The line as written, split into `name =`, value, `;`
+    lines = read_lines(rep.loc.origin.real) if rep.loc else []
+    src = lines[rep.loc.line - 1] if lines and rep.loc.line and rep.loc.line <= len(lines) else ""
+    am = re.match(r"^(?P<pre>\s*[^=#]+?=\s*)(?P<val>.+?)(?P<post>\s*;\s*(?:#.*)?)$", src)
+    val = am["val"] if am and vars.get("opt_last", "\0") in am["pre"] else None
+    unquoted = val.strip('"') if val and re.fullmatch(r'"[^"]*"', val) else None
+
+    advice, new = "", None
+    if want == "boolean":
+        advice = "Use `true` or `false`, without quotes."
+        if unquoted is not None:
+            word = unquoted.lower()
+            if word in ("yes", "true", "on", "1", "enable", "enabled"):
+                new = "true"
+            elif word in ("no", "false", "off", "0", "disable", "disabled"):
+                new = "false"
+    elif want == "string" and got == "list":
+        advice = "It's a list (`[ ]`), but a single string is wanted. Remove the brackets."
+        if val and (lm := re.fullmatch(r"\[\s*(\"[^\"]*\")\s*\]", val)):
+            new = lm[1]
+    elif want == "string" and got in ("integer", "number", "boolean"):
+        advice = "Put it in quotes."
+        new = f'"{val}"' if val and not val.startswith('"') else None
+    elif want == "list" and got and got != "list":
+        advice = "This option holds a list, even for a single item. Wrap it in `[ ]`."
+        new = f"[ {val} ]" if val else None
+    elif want == "integer" and got == "string":
+        advice = "Write the number without quotes."
+        new = unquoted if unquoted and re.fullmatch(r"-?\d+", unquoted) else None
+    elif want == "package" and got == "string":
+        advice = "Use the package itself (`pkgs.name`), not its name in quotes."
+        new = f"pkgs.{unquoted}" if unquoted and re.fullmatch(r"[\w.-]+", unquoted) else None
+    elif want == "enum":
+        allowed = enum_values(desc)
+        listed = ", ".join(allowed)
+        # A value of the right kind that just isn't in the list: say that, not "wrong kind".
+        if got and got == value_kind(allowed[0] if allowed else ""):
+            short = one_line if one_line and len(one_line) < 40 else "This value"
+            rep.title = f"{short} isn't an allowed value for this option"
+            vars["explain_text"] = f"`{option}` only accepts {listed}{f', and `{one_line}` is not one of them' if shown else ''}."
+        if one_line and (guess := closest_value(one_line, allowed)):
+            advice = f"Did you mean {guess}? (allowed: {listed})"
+            if val is not None and val.strip() == one_line:
+                new = guess
+        else:
+            advice = f"Use one of the allowed values: {listed}."
+    elif want == "attribute set" and got == "list":
+        advice = "Use `{ name = value; }`, not a list `[ ]`."
+    elif want == "path" and got == "string" and unquoted and not unquoted.startswith("/"):
+        advice = "Use an absolute path (starting with `/`), or a path relative to this file without quotes (`./file`)."
+    if advice:
+        at = f"On line {rep.loc.line}: " if rep.loc and rep.loc.line else ""
+        vars["fix_text"] = at + advice[0].lower() + advice[1:] if at else advice
+        if new is not None and am:
+            vars["fix_text"] += f"\n    {(am['pre'] + new + am['post']).strip()}"
+    elif got:
+        vars["note"] = ("Typical mix-ups: a list `[ ]` where a single value is wanted (or the reverse), a missing "
+                        "pair of quotes, or `true` written as `\"true\"`.")
+
+
+# ─── a service failed while switching ───────────────────────────────────────
+
+UNIT_EXIT_RE = re.compile(r"code=(?P<code>\w+), status=(?P<status>\d+|\w+)(?:/(?P<sname>[\w-]+))?")
+UNIT_RESULT_RE = re.compile(r"Failed with result '(?P<result>[\w-]+)'")
+UNIT_EXEC_RE = re.compile(r"ExecStart=(?P<exe>\S+)")
+# a journal line as `systemctl status` prints it: `Oct 13 22:31:03 nixos bash[6797]: something broke`
+STATUS_JOURNAL_RE = re.compile(r"^\s*\w{3} [ \d]\d [\d:]{8} \S+ (?P<ident>[^\s\[:]+)(?:\[\d+\])?: (?P<msg>.*)$", re.M)
+# and as `journalctl -o short-unix` prints it: `1760409063.123456 nixos bash[6797]: something broke`
+UNIX_JOURNAL_RE = re.compile(r"^(?P<ts>\d+\.\d+) \S+ (?P<ident>[^\s\[:]+)(?:\[\d+\])?: (?P<msg>.*)$", re.M)
+UNIT_KINDS = {"service": "services", "timer": "timers", "socket": "sockets", "path": "paths"}
+# the new NVIDIA tools can't talk to the old kernel module, which stays loaded until a reboot
+DRIVER_MISMATCH_RE = re.compile(r"Driver/library version mismatch|NVRM: API mismatch")
+NVML_VERSION_RE = re.compile(r"NVML library version: (?P<v>[\d.]+)")
+# it ran before the network was up (typically a timer catching up right after boot)
+NETWORK_RE = re.compile(r"[Cc]ould not resolve host|Temporary failure in name resolution|Name or service not known|"
+                        r"Network is unreachable|No route to host|getaddrinfo")
+# what reproduce() writes for a unit that was failed when the switch ended but has restarted fine since
+RECOVERED_RE = re.compile(r"failed at (?P<failed>[\d.]+), then restarted fine at (?P<ok>[\d.]+)")
+
+
+def loaded_nvidia_version() -> str:
+    try:
+        m = re.search(r"Kernel Module\s+(?P<v>[\d.]+)", Path("/proc/driver/nvidia/version").read_text())
+        return m["v"] if m else ""
+    except OSError:
+        return ""
+
+
+def driver_mismatch(unit: str, others: list[str], flake: Flake, log: str) -> tuple[str, str]:
+    """(explain, fix) for a GPU service that failed because a switch changed the driver without a reboot."""
+    old, new = loaded_nvidia_version(), (m["v"] if (m := NVML_VERSION_RE.search(log)) else "")
+    explain = "Your GPU driver changed during the last update, and you need to reboot to use it."
+    if old and new and old != new:
+        explain += f" The running kernel still has the old NVIDIA driver ({old}) loaded, but the new tools are {new}."
+    else:
+        explain += " The running kernel still has the old NVIDIA driver loaded, and the new tools won't talk to it."
+    explain += (f"\n\n`{unit}` failed because of that, not because of anything in its definition. A switch can't "
+                "swap a driver that's in use, so every service that talks to the GPU fails until you reboot")
+    explain += f" (here also {', '.join(f'`{o}`' for o in others)})." if others else "."
+    if flake.dir and (flake.dir / "flake.nix").exists():
+        plain = f"    sudo nixos-rebuild boot --flake {flake.dir}\n    reboot"
+    else:
+        plain = "    sudo nixos-rebuild boot\n    reboot"
+    fix = ("Make the update your next boot, then reboot:\n    nh os boot\n    reboot\n\n"
+           f"Or without nh:\n{plain}\n\n"
+           "`boot` doesn't touch the running system, so nothing fails on the way. Your config and the "
+           "service are fine: don't remove it.")
+    return explain, fix
+
+
+def unit_journal(unit: str, user: bool, text: str, until: float | None = None) -> list[tuple[float | None, str, str]]:
+    """(time, who, message) for the unit's last run (before `until`): from the journal, else from
+    `systemctl status` in the text."""
+    entries: list[tuple[float | None, str, str]] = []
+    try:
+        out = run(["journalctl", "-b", "--user-unit" if user else "-u", unit, "-n", "60", "--no-pager",
+                   "-o", "short-unix", *(["--until", f"@{until:.6f}"] if until else [])], timeout=10).stdout
+        entries = [(float(m["ts"]), m["ident"], m["msg"]) for m in UNIX_JOURNAL_RE.finditer(out)]
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    if not entries:
+        entries = [(None, m["ident"], m["msg"]) for m in STATUS_JOURNAL_RE.finditer(text)]
+    starts = [i for i, (_, who, msg) in enumerate(entries) if who == "systemd" and msg.startswith("Start")]
+    return entries[starts[-1]:] if starts else entries
+
+
+def unit_show(unit: str, user: bool, prop: str) -> str:
+    try:
+        return run(["systemctl", *(["--user"] if user else []), "show", "-P", prop, "--timestamp=unix", unit],
+                   timeout=10).stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+def when(ts: float) -> str:
+    t = time.localtime(ts)
+    return time.strftime("%H:%M" if t[:3] == time.localtime()[:3] else "%B %-d, %H:%M", t)
+
+
+def unit_reason(code: str, status: str, sname: str, result: str, exe: str) -> tuple[str, str]:
+    """(what went wrong, what to do) from systemd's exit code and result."""
+    prog = f"`{exe}`" if exe else "its program"
+    if status == "203" or sname == "EXEC":
+        return (f"systemd couldn't run {prog}: it doesn't exist or isn't executable.",
+                "Check the path in `ExecStart`. On NixOS, programs live in the Nix store: write "
+                "`${pkgs.foo}/bin/foo` (or use `script = ''…''`), not `/usr/bin/foo`.")
+    if status == "217" or sname == "USER":
+        return "the user it should run as (`User=`) doesn't exist.", "Create the user, or fix `User=`."
+    if status == "200" or sname == "CHDIR":
+        return "its working directory (`WorkingDirectory=`) doesn't exist.", "Create that folder, or fix `WorkingDirectory=`."
+    if result == "oom-kill":
+        return "it ran out of memory and was killed.", "Give it less to do, or the machine more memory or swap."
+    if result == "timeout":
+        return "it took too long to start, so systemd gave up on it.", "Check what it waits for, or raise `TimeoutStartSec`."
+    if result == "start-limit-hit":
+        return ("it failed and was restarted too often in a short time, so systemd stopped trying.",
+                "The first failure's cause is further up in its log.")
+    if code in ("killed", "dumped"):
+        crash = " (it crashed)" if code == "dumped" or sname in ("SEGV", "ABRT", "BUS", "ILL") else ""
+        return f"it was stopped by signal {sname or status}{crash}.", ""
+    if code == "exited" and status not in ("0", ""):
+        return (f"{prog} ran, but exited with status {status}: the program itself reported an error.",
+                "Its own messages, if it printed any, are in the log above.")
+    return "", ""
+
+
+def unit_defined_in(flake: Flake, kind: str, name: str) -> list[Origin]:
+    """The files that define a unit, asked of your config itself: finds a module's unit even when its name doesn't
+    match the option that turns it on (nix-flatpak's `flatpak-managed-install-timer`, for `services.flatpak`)."""
+    cfg = flake.config
+    if not cfg or not cfg.kind:
+        return []
+    opt = f"options.{kind}.definitionsWithLocations"
+    pick = f"ds: map (d: d.file) (builtins.filter (d: d.value ? {json.dumps(name)}) ds)"
+    if cfg.kind == "flake":
+        cmd = ["nix", "--extra-experimental-features", "nix-command flakes", "eval", "--json",
+               f'{cfg.ref}#nixosConfigurations."{cfg.host}".{opt}', "--apply", pick]
+    else:
+        cmd = ["nix-instantiate", "--eval", "--strict", "--json", "-E",
+               f"({pick}) (import <nixpkgs/nixos> {{ configuration = /. + {json.dumps(cfg.ref)}; }}).{opt}"]
+    try:
+        files = json.loads(run_with_timer(cmd, "Looking up where the unit comes from").stdout)
+    except (OSError, ValueError):
+        return []
+    # a flake-parts module reads `/nix/store/…/foo.nix, via option flake.modules.nixos.foo`
+    return [flake.origin(f.split(", via option ")[0]) for f in files if isinstance(f, str)]
+
+
+def module_switch(src: str) -> str | None:
+    """The option a module's settings hang on: `services.foo` from `cfg = config.services.foo` (with `.enable` if
+    it's `mkIf cfg.enable` or `mkIf config.services.foo.enable`), else from `mkIf config.services.foo.enable`.
+    `cfg` comes first: a unit can also sit behind a broader switch (nixpkgs' nix-gc is `mkIf config.nix.enable`)."""
+    if m := re.search(r"\bcfg\s*=[^;]*?\bconfig\.([\w.-]+)\s*;", src):
+        on = re.search(rf"\bmkIf\s+\(?\s*(?:cfg|config\.{re.escape(m[1])})\.enable\b", src)
+        return m[1] + (".enable" if on else "")
+    if m := re.search(r"\bmkIf\s+\(?\s*config\.([\w.-]+)\.enable\b", src):
+        return m[1] + ".enable"
+    return None
+
+
+def h_unit(rep: Report, vars: dict, flake: Flake, rules, text: str) -> None:
+    """A unit in a failed state after switching: its log, why it failed, where you define it, and when it failed."""
+    unit = vars.get("unit") or re.split(r"[,\s]+", vars.get("units", "").strip())[0]
+    user = bool(vars.get("user"))
+    vars["unit"] = unit
+    base, _, suffix = unit.rpartition(".")
+    base, suffix = (base, suffix) if suffix in UNIT_KINDS else (unit, "service")
+    rep.said_by, rep.log_label = "systemd", f"{unit}'s log"
+
+    # why: systemd's own lines from its last run (or `systemctl status` output pasted in); for a unit that has
+    # restarted fine since, the run that failed
+    recovered = RECOVERED_RE.search(text)
+    entries = unit_journal(unit, user, text, float(recovered["ok"]) - 0.001 if recovered else None)
+    said = [f"{msg}" for _, who, msg in entries if who == "systemd" and (UNIT_EXIT_RE.search(msg) or UNIT_RESULT_RE.search(msg))]
+    ownlines = [msg for _, who, msg in entries if who != "systemd"]
+    rep.log_tail = ownlines[-15:]
+    rep.nix_said = "\n".join(said[-2:])  # nothing from systemd: say nothing, rather than our own words
+    blob = "\n".join(said) + "\n" + text
+    ex = UNIT_EXIT_RE.search(blob)
+    res = UNIT_RESULT_RE.search(blob)
+    exe = (m["exe"] if (m := UNIT_EXEC_RE.search(text)) else
+           m[1] if (m := re.search(r"path=(\S+)", unit_show(unit, user, "ExecStart"))) else "")
+    why, todo = unit_reason(ex["code"] if ex else "", ex["status"] if ex else "", (ex["sname"] or "") if ex else "",
+                            res["result"] if res else "", STORE_HASH_RE.sub("…/", exe))
+
+    # where: your own `systemd.services.foo`, else a module you turn on. Your config says which files define the
+    # unit; the name only guesses (a module's unit can be named anything, and `systemd.services = { foo = …` hides it).
+    kind = ("systemd.user." if user else "systemd.") + UNIT_KINDS[suffix]
+    plain = base.split("@")[0] + ("@" if "@" in base else "")
+    name = re.escape(base.split("@")[0])
+    defined = flake.find([rf'\b{re.escape(kind)}\.(?:"{name}"|{name})(?![\w-])'], regex=True)
+    origins = unit_defined_in(flake, kind, plain)
+    if not defined and (mine := next((o for o in origins if o.owner == "you"), None)):
+        lines = read_lines(mine.real)
+        line = next((i + 1 for i, l in enumerate(lines) if re.search(rf'(?:"{name}@?"|\b{name})\s*=', l.split("#")[0])), None)
+        defined = Loc(mine, line)
+    exec_line = None
+    if defined and defined.line:
+        # Stay inside its `{ … }`, by brackets rather than indentation (blocks aren't always indented).
+        lines = read_lines(defined.origin.real)
+        depth = len(open_at(lines, defined.line, 1))
+        for i in range(defined.line - 1, min(len(lines), defined.line + 60)):
+            if i >= defined.line and len(open_at(lines, i + 1, 1)) <= depth:
+                break
+            if re.search(r"\b(?:ExecStart|script|preStart)\s*=", lines[i].split("#")[0]):
+                exec_line = i + 1
+                break
+    # A module makes it, unless you replace the command it runs: then it's yours.
+    mod = None if exec_line else next((o for o in origins if o.owner == "upstream"), None)
+    opt = on = None
+    if mod:
+        opt = module_switch("\n".join(read_lines(mod.real)))
+        group = opt.removesuffix(".enable") if opt else ""
+        needles = [rf"\b{re.escape(opt)}\s*=\s*true\b",
+                   # `services.foo = {`, but not a bare `nix = {` (too common inside other settings)
+                   *([rf"\b{re.escape(group)}\s*=\s*\{{"] if "." in group else []),
+                   rf"\b{re.escape(opt)}\b"] if opt else []
+        # else (or not found) the line that brings the module in: `inputs.nix-flatpak.nixosModules.…`
+        needles.append(rf"\binputs\.{re.escape(mod.label.split('/')[-1])}\.\w*[Mm]odules\b")
+        on = flake.find(needles, regex=True)
+        rep.loc, rep.blame = on or defined, "upstream"
+        rep.whose = mod.label + (f", which you turn on in {on.origin.display}" if on else "")
+    elif defined:
+        rep.loc = Loc(defined.origin, exec_line) if exec_line else defined
+        rep.blame = "you"
+    enabled = None if defined or mod else flake.find(
+        [rf"\b(?:services|programs)\.{name}\.enable\s*=\s*true\b", rf"\b(?:services|programs)\.{name}\s*=\s*\{{"], regex=True)
+    if enabled:
+        rep.loc = enabled
+
+    # when: during the switch you just piped in, during your last switch, or earlier
+    load = unit_show(unit, user, "LoadState")
+    failed_at = next((ts for ts, who, msg in reversed(entries) if ts and who == "systemd" and msg.startswith(("Failed", f"{unit}: Failed"))), None)
+    try:
+        switched = os.lstat("/run/current-system").st_mtime
+    except OSError:
+        switched = None
+    in_switch = bool(re.search(r"the following units failed:", text))
+    # systemd doesn't know it, and neither your config nor the switch you piped in mention it
+    leftover = load == "not-found" and not (in_switch or defined or enabled or mod)
+    recent = ""
+    if recovered:
+        recent = (f"It failed at {when(float(recovered['failed']))} and was still failed when your last switch "
+                  f"ended ({when(switched)}), so the switch reported it. systemd restarted it at "
+                  f"{when(float(recovered['ok']))} and it ran fine, so it's working now; the next switch won't "
+                  "report it unless it fails again.")
+    elif in_switch:
+        recent = "It failed while switching to your new config."
+    elif leftover:
+        recent = (f"Its unit file no longer exists: it's left over from an earlier generation, and has nothing to do "
+                  f"with your current config.")
+    elif failed_at and switched:
+        recent = (f"It failed during your last switch ({when(switched)})." if failed_at >= switched - 5 else
+                  f"It failed at {when(failed_at)}, before your last switch ({when(switched)}), so it may have nothing "
+                  "to do with your latest change: a switch only restarts services whose definition changed.")
+
+    explain = f"Your config built fine, but the {'user ' if user else ''}service `{unit}` failed"
+    explain += f": {why}" if why else "."
+    at = lambda l: f"line {l.line} of {l.origin.display}" if l.line else l.origin.display
+    if mod:
+        made = f"{mod.label}'s {mod.display.split(': ', 1)[-1]}"
+        explain += (f" It isn't written in your files: {made} makes it, for `{opt}`, which you set on {at(on)}." if opt and on else
+                    f" It isn't written in your files: {made} makes it, a module you bring in on {at(on)}." if on else
+                    f" It isn't written in your files: {made} makes it.")
+        if defined:
+            explain += f" You add your own settings to it on {at(defined)}."
+    elif defined:
+        explain += f" You define it yourself, on {at(defined)}."
+    elif enabled:
+        explain += (f" It isn't written in your files: it comes from the NixOS module you turn on on line {enabled.line} "
+                    f"of {enabled.origin.display}.")
+    if not rep.log_tail and entries:
+        explain += " It printed nothing before failing."
+    vars["explain_text"] = explain + (f"\n\n{recent}" if recent else "")
+    others = re.findall(r"^also failed: (\S+)", text, re.M) + [
+        u for u in re.split(r"[,\s]+", vars.get("units", "").strip()) if u and u != unit]
+    if others:
+        vars["explain_text"] += f"\n\nAlso failed: {', '.join(f'`{o}`' for o in others)}."
+
+    jflag = "--user-unit" if user else "-u"
+    if DRIVER_MISMATCH_RE.search("\n".join(ownlines) + "\n" + text):
+        rep.blame = "system"
+        rep.loc = flake.find([r'\bvideoDrivers\s*=.*"nvidia"', r"\bhardware\.nvidia\b"], regex=True) or rep.loc
+        vars["explain_text"], fix = driver_mismatch(unit, others, flake, "\n".join(ownlines) + "\n" + text)
+        vars["fix_text"] = f"{fix}\n\nFull log:\n    journalctl -b {jflag} {unit}"
+        return
+
+    fix = []
+    if leftover:
+        fix.append(f"Clear the old failure:\n    sudo systemctl reset-failed {unit}")
+    elif not user and NETWORK_RE.search("\n".join(ownlines)):
+        # nothing wrong with the service: it ran before the network was up
+        vars["explain_text"] += ("\n\nIt couldn't reach the network: it started before your connection was up. "
+                                 "That's typical of a timer with `Persistent=true` catching up on a missed run "
+                                 "right after boot.")
+        attr = base if re.fullmatch(r"[A-Za-z_][\w-]*", base) else f'"{base}"'
+        fix.append(f"Make it wait for the network:\n    {kind}.{attr} = {{\n"
+                   f"      wants = [ \"network-online.target\" ];\n"
+                   f"      after = [ \"network-online.target\" ];\n    }};")
+        fix.append(f"Full log:\n    journalctl -b {jflag} {unit}")
+    else:
+        if defined and exec_line:
+            fix.append(f"Look at line {exec_line} of {defined.origin.display}, the command the service runs. {todo}".strip())
+        elif todo:
+            fix.append(todo)
+        if mod and opt and on:
+            fix.append(f"If you don't need what it does, turn off `{opt}` ({at(on)}).")
+        elif defined:
+            fix.append("If you're not sure the service is needed, remove it or set `wantedBy = [ ];` so it doesn't start.")
+        fix.append(f"Full log:\n    journalctl -b {jflag} {unit}")
+    vars["fix_text"] = "\n\n".join(fix)
+
+
+HANDLERS = {
+    "semicolon": h_semicolon, "brackets": h_brackets, "build": h_build,
+    "module_arg": h_module_arg, "assertion": h_assertion, "stray_closer": h_stray_closer,
+    "semicolon_inside": h_semicolon_inside,
+    "duplicate_attr": h_duplicate_attr,
+    "equals_inside": h_equals_inside,
+    "bare_word": h_bare_word,
+    "unknown_name": h_unknown_name,
+    "removed_pkg": h_removed_pkg,
+    "missing_module": h_missing_module,
+    "hm_file": h_hm_file,
+    "unfree": h_unfree,
+    "insecure": h_insecure,
+    "broken": h_broken,
+    "option_type": h_option_type,
+    "unit": h_unit,
+}
+
+
+# ─── getting the error: reproduce it ourselves ──────────────────────────────
+
+
+def run(cmd: list[str], timeout: int | None = None) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+
+
+@dataclass
+class Config:
+    """Where the user's NixOS config is: a flake (`ref` is a flake ref, `dir` its folder if local) or a
+    classic configuration.nix (`ref` is that file, `dir` its folder). `problem` says why none was found."""
+    kind: str = ""  # "flake" | "classic" | "" (not found)
+    ref: str = ""
+    dir: Path | None = None
+    host: str = ""
+    problem: str = ""
+
+
+def find_config(given: str | None, host: str | None) -> Config:
+    """--config/--flake, then $NH_OS_FLAKE / $NH_FLAKE / $FLAKE (nh), then $NIXOS_CONFIG, then a flake in
+    /etc/nixos, then `nixos-config` from $NIX_PATH, then /etc/nixos/configuration.nix."""
+    env = next((os.environ[v] for v in ("NH_OS_FLAKE", "NH_FLAKE", "FLAKE") if os.environ.get(v)), None)
+    ref = given or env
+    hostname = socket.gethostname()
+    if ref:
+        path, _, ref_host = ref.partition("#")
+        host = host or ref_host or hostname
+        local = re.sub(r"^(?:path:|git\+file://)", "", path)
+        if re.match(r"^[\w+-]+:", local):  # a remote flake ref (github:me/config): nothing local to read
+            return Config("flake", path, None, host)
+        p = Path(local).expanduser()
+        if p.is_file():
+            if p.name == "flake.nix":
+                return Config("flake", str(p.parent.resolve()), p.parent.resolve(), host)
+            return Config("classic", str(p.resolve()), p.resolve().parent, host)
+        if (p / "flake.nix").is_file():
+            return Config("flake", str(p.resolve()), p.resolve(), host)
+        for name in ("configuration.nix", "default.nix"):
+            if (p / name).is_file():
+                return Config("classic", str((p / name).resolve()), p.resolve(), host)
+        why = "doesn't exist" if not p.exists() else "has no flake.nix or configuration.nix"
+        src = "--config" if given else next(v for v in ("NH_OS_FLAKE", "NH_FLAKE", "FLAKE") if os.environ.get(v))
+        return Config(host=host, problem=f"{local} (from {src}) {why}.")
+    host = host or hostname
+    if nc := os.environ.get("NIXOS_CONFIG"):
+        p = Path(nc).expanduser()
+        p = p / "default.nix" if p.is_dir() else p
+        if p.is_file():
+            return Config("classic", str(p.resolve()), p.resolve().parent, host)
+    if Path("/etc/nixos/flake.nix").is_file():
+        return Config("flake", "/etc/nixos", Path("/etc/nixos").resolve(), host)
+    try:
+        found = subprocess.run(["nix-instantiate", "--find-file", "nixos-config"],
+                               capture_output=True, text=True, timeout=10).stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        found = ""
+    for p in [Path(found)] * bool(found) + [Path("/etc/nixos/configuration.nix")]:
+        p = p / "default.nix" if p.is_dir() else p
+        if p.is_file():
+            return Config("classic", str(p.resolve()), p.resolve().parent, host)
+    return Config(host=host, problem="No NixOS config found: /etc/nixos has no flake.nix or configuration.nix, "
+                                     "and $NH_OS_FLAKE, $NIXOS_CONFIG and $NIX_PATH don't name one.")
+
+
+def reproduce(cfg: Config) -> tuple[str | None, str]:
+    """Returns (output to explain, how we got it). Output is None if nothing fails."""
+    nixcmd = ["nix", "--extra-experimental-features", "nix-command flakes"]
+    if cfg.kind == "flake":
+        target = f'{cfg.ref}#nixosConfigurations."{cfg.host}".config.system.build.toplevel'
+        cmd = [*nixcmd, "build", "--dry-run", "--show-trace", target]
+        how = f"re-evaluated {cfg.ref}#{cfg.host}"
+    else:
+        cmd = ["nix-build", "<nixpkgs/nixos>", "-A", "system", "--dry-run", "--show-trace",
+               "-I", f"nixos-config={cfg.ref}"]
+        how = f"re-evaluated {cfg.ref}"
+    p = run_with_timer(cmd, "Re-checking your config to catch the error")
+    if p.returncode != 0:
+        return p.stderr + p.stdout, how, ""
+
+    # Evaluation is fine, so it was a build failure. Nix keeps the logs of builds that didn't finish:
+    # the one that failed, and the ones it cut off when that happened (or when you pressed Ctrl-C).
+    drvs = re.findall(r"^\s+(/nix/store/\S+\.drv)$", p.stderr + p.stdout, re.M)
+    drv, cut_off = failed_build(drvs)
+    if drv:
+        # the system's own derivation, so the build handler can ask Nix what needs the failed one
+        top = next((d for d in drvs if re.search(r"/[a-z0-9]{32}-nixos-system-", d)), None)
+        return (f"error: Cannot build '{drv}'.\n       Reason: builder failed (log kept from the last attempt).\n"
+                + (f"error: Cannot build '{top}'.\n       Reason: 1 dependency failed.\n" if top else ""),
+                how + "; it evaluates, so used a failed build log", "")
+    note = ""
+    if cut_off:
+        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(max(cut_off)))
+        n = len(cut_off)
+        note = (f" Your last build stopped partway: {n} build{'s' if n > 1 else ''} it started (up to {when}) "
+                f"didn't finish, but {'none of their logs ends' if n > 1 else "its log doesn't end"} in an error, "
+                "so it was interrupted, not failed. Rebuilding finishes them.")
+
+    # Builds fine too: maybe the switch itself (activation) failed. The unit handler reads the journal.
+    units = []
+    for scope in ("", "user "):
+        out = run(["systemctl", *(["--user"] if scope else []), "--failed", "--no-legend", "--plain"], timeout=10).stdout
+        units += [(scope, l.split()[0]) for l in out.splitlines() if l.strip()]
+    if units:
+        scope, unit = next((u for u in units if "home-manager" in u[1]), units[0])
+        also = "".join(f"\nalso failed: {u}" for _, u in units if u != unit)
+        return (f"error: {scope}unit {unit} failed{also}\n", how + f"; it builds, so checked the failed unit {unit}",
+                "")
+    if found := recovered_unit():
+        scope, unit, failed_at, ok_at = found
+        return (f"error: {scope}unit {unit} failed at {failed_at:.6f}, then restarted fine at {ok_at:.6f}\n",
+                how + f"; it builds, so checked the journal: {unit} failed during your last switch", "")
+    return None, how, note
+
+
+def recovered_unit() -> tuple[str, str, float, float] | None:
+    """A unit that was failed when your last switch ended, so the switch reported it, but that systemd has
+    restarted fine since (Restart=on-failure), so `systemctl --failed` no longer lists it:
+    (scope, unit, when it failed, when the run that worked started)."""
+    try:
+        switched = os.lstat("/run/current-system").st_mtime
+    except OSError:
+        return None
+    found = None
+    for scope, args, field in (("", ["_PID=1"], "UNIT"), ("user ", ["--user", "-t", "systemd"], "USER_UNIT")):
+        try:
+            out = run(["journalctl", "-b", *args, "-o", "json", f"--output-fields={field},MESSAGE",
+                       "--since", f"@{switched - 3600:.0f}", "--no-pager"], timeout=10).stdout
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        failed: dict[str, float] = {}
+        for line in out.splitlines():
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            unit, msg = e.get(field), e.get("MESSAGE")
+            if not isinstance(unit, str) or not isinstance(msg, str):
+                continue
+            ts = int(e["__REALTIME_TIMESTAMP"]) / 1e6
+            if UNIT_RESULT_RE.search(msg):
+                failed[unit] = ts
+            elif msg.startswith("Starting ") and unit in failed:
+                # still failed when the switch ended, and restarted after it
+                if failed[unit] <= switched + 5 and ts >= switched - 5 and (not found or ts > found[3]):
+                    found = (scope, unit, failed[unit], ts)
+                del failed[unit]
+    return found
+
+
+def failed_build(drvs: list[str]) -> tuple[str | None, list[float]]:
+    """The build that failed, from Nix's kept logs; else the times of logs from builds that were only cut off."""
+    failed, cut_off = [], []
+    for d in drvs:
+        if not (f := build_log_file(d)):
+            continue
+        t = f.stat().st_mtime
+        (failed if log_shows_failure(read_build_log(d) or "") else cut_off).append((t, d))
+    if not failed:
+        return None, [t for t, _ in cut_off]
+    # When a build fails, Nix kills the others still running, and their logs are closed just after the
+    # failed one's. Of the failed-looking logs in that last burst, the failure is the earliest.
+    failed.sort(reverse=True)
+    burst = [failed[0]]
+    for t, d in failed[1:]:
+        if burst[-1][0] - t > 3:
+            break
+        burst.append((t, d))
+    return burst[-1][1], []
+
+
+# ─── output ──────────────────────────────────────────────────────────────────
+
+COLOR = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
+
+
+def c(code: str, s: str) -> str:
+    return f"\x1b[{code}m{s}\x1b[0m" if COLOR else s
+
+
+def status(msg: str) -> None:
+    print(c("2", msg), file=sys.stderr)
+
+
+def run_with_timer(cmd: list[str], msg: str) -> subprocess.CompletedProcess:
+    """Run cmd, showing a ticking elapsed time on the terminal so a long evaluation doesn't look stuck."""
+    if not sys.stderr.isatty():
+        status(msg + "…")
+        return run(cmd)
+    start = time.monotonic()
+    with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as proc:
+        out: dict[str, str] = {}
+
+        def collect() -> None:
+            out["stdout"], out["stderr"] = proc.communicate()
+
+        reader = threading.Thread(target=collect, daemon=True)
+        reader.start()
+        try:
+            while reader.is_alive():
+                secs = int(time.monotonic() - start)
+                hint = "  (a first check without cache can take a few minutes)" if secs >= 20 else ""
+                sys.stderr.write(f"\r\x1b[2K{c('2', f'{msg}… {secs}s{hint}')}")
+                sys.stderr.flush()
+                reader.join(0.5)
+        finally:
+            sys.stderr.write("\r\x1b[2K")
+            sys.stderr.flush()
+    status(f"{msg}: done in {int(time.monotonic() - start)}s")
+    return subprocess.CompletedProcess(cmd, proc.returncode, out.get("stdout", ""), out.get("stderr", ""))
+
+
+def warn(msg: str) -> None:
+    print(c("33", f"nixed-error: {msg}"), file=sys.stderr)
+
+
+BLAME = {
+    "you": ("36", "Your config", "something in your own files"),
+    "upstream": ("35", "Upstream", "not something you typed"),
+    "system": ("33", "Your machine", "disk, network, drivers or permissions, not your config"),
+    "unknown": ("2", "Unclear", "couldn't tell whose it is"),
+}
+
+
+def wrap(s: str, indent: str = "    ") -> str:
+    width = min(shutil.get_terminal_size((100, 20)).columns, 100)
+    out: list[str] = []
+    prose: list[str] = []
+
+    def flush() -> None:
+        if prose:
+            out.append(textwrap.fill(" ".join(prose), width, initial_indent=indent, subsequent_indent=indent,
+                                     break_long_words=False, break_on_hyphens=False))
+            prose.clear()
+
+    # Consecutive prose lines are joined and re-wrapped; indented lines (code, lists) stay as they are.
+    for line in s.split("\n"):
+        if not line.strip():
+            flush()
+            if out and out[-1] != "":
+                out.append("")
+        elif line.startswith((" ", "-")):
+            flush()
+            out.append(indent + line)
+        else:
+            prose.append(line.strip())
+    flush()
+    while out and out[-1] == "":
+        out.pop()
+    return "\n".join(out)
+
+
+def snippet(loc: Loc) -> str:
+    lines = read_lines(loc.origin.real)
+    if not lines or not loc.line or loc.line > len(lines):
+        return ""
+    lo, hi = max(1, loc.line - 2), min(len(lines), loc.line + 1)
+    w = len(str(hi))
+    out = []
+    for n in range(lo, hi + 1):
+        mark = c("31;1", "→") if n == loc.line else " "
+        num = c("1", str(n).rjust(w)) if n == loc.line else c("2", str(n).rjust(w))
+        out.append(f"    {mark} {num} │ {lines[n - 1]}")
+    return "\n".join(out)
+
+
+def print_report(rep: Report, verbose: bool) -> None:
+    color, label, sub = BLAME[rep.blame]
+    print()
+    print(c("1", f"✗ {rep.title}"))
+    print(f"  {c('2', 'Whose:')} {c(color + ';1', label)} {c('2', '— ' + (rep.whose or (rep.loc.origin.label if rep.blame == 'upstream' and rep.loc and rep.loc.origin.owner != 'you' else sub)))}")
+    if rep.loc:
+        print(f"  {c('2', 'Where:')} {rep.loc.describe()}")
+    for o in rep.others:
+        print(f"  {c('2', '  and:')} {o.describe()}")
+    if rep.context and rep.context != "system.build.toplevel" and rep.rule_id not in (
+            "missing-semicolon", "unexpected-eof", "syntax-error", "list-comma"):
+        print(f"  {c('2', 'While:')} working out the option {rep.context}")
+    if rep.loc and (sn := snippet(rep.loc)):
+        print()
+        print(sn)
+    print()
+    if rep.explain:
+        print(wrap(rep.explain, "  "))
+    if rep.note:
+        print()
+        print(wrap(rep.note, "  "))
+    if rep.cause:
+        print()
+        print(c("1", f"  Why the build failed: {rep.cause.title}"))
+        if rep.cause.explain:
+            print(wrap(rep.cause.explain, "    "))
+        if rep.cause.fix and not rep.fix:
+            rep.fix = rep.cause.fix
+        elif rep.cause.fix:
+            rep.fix = rep.cause.fix + "\n\n" + rep.fix
+    if rep.log_tail:
+        print()
+        tail = rep.log_tail[-(15 if verbose else 8):]
+        # `/nix/store/<32-char hash>-coreutils-9.11/bin/mkdir` → `…/coreutils-9.11/bin/mkdir`: the hashes
+        # make every line wrap and say nothing to a reader. -v keeps them.
+        short = [l if verbose else STORE_HASH_RE.sub("…/", l) for l in tail]
+        shortened = short != tail
+        print(c("2", f"  End of {rep.log_label}" + (" (store paths shortened; -v for full):" if shortened else ":")))
+        for l in short:
+            print(c("2", "    > ") + l[:200])
+    if rep.suggest:
+        print()
+        print(f"  {c('1', 'Did you mean:')} {rep.suggest}")
+    if rep.fix:
+        print()
+        print(c("32;1", "  Fix"))
+        print(wrap(rep.fix, "    "))
+    # Nix's first paragraph: a message ending in "Definition values:" needs the lines after it to make sense.
+    said = rep.nix_said if verbose or rep.rule_id is None else rep.nix_said.split("\n\n")[0]
+    if not verbose and rep.rule_id and len(lines := said.splitlines()) > 6:
+        said = "\n".join(lines[:6] + ["…"])
+    if said and (verbose or rep.rule_id is None or len(said) < 400):
+        print()
+        print(c("2", f"  What {rep.said_by} said:"))
+        print(c("2", textwrap.indent(said, "    ")))
+    if rep.saved_to:
+        print()
+        print(c("2", f"  Saved to {rep.saved_to} so a rule can be written for it later."))
+        print(c("2", f"  Add your own rules in {USER_RULES}"))
+    print()
+    if rep.source:
+        print(c("2", f"  ({rep.source})"))
+
+
+def pipe_hint(switch: str) -> str:
+    """`<switch> 2>&1 | nixed-error`, with how to call nixed-error when it isn't installed (`nix run …`)."""
+    if shutil.which("nixed-error"):
+        return f"\n    {switch} 2>&1 | nixed-error\n"
+    if run_cmd := os.environ.get("NIXED_ERROR_RUN"):
+        return f"\n    {switch} 2>&1 | {run_cmd}\n"
+    return (f"\n    {switch} 2>&1 | nix run <flake>#nixed-error\n\n"
+            + wrap("(nixed-error isn't installed, so use the same `nix run …` command you started it with.)", "  ")
+            + "\n")
+
+
+def save_unknown(text: str) -> Path | None:
+    try:
+        UNKNOWN_DIR.mkdir(parents=True, exist_ok=True)
+        path = UNKNOWN_DIR / time.strftime("%Y%m%d-%H%M%S.log")
+        path.write_text(clean(text))
+        return path
+    except OSError:
+        return None
+
+
+# ─── main ────────────────────────────────────────────────────────────────────
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(
+        prog="nixed-error",
+        description="Explain a failed NixOS rebuild in plain words.",
+        epilog="With no LOG and nothing piped in, nixed-error re-evaluates your config to capture the error itself.",
+    )
+    ap.add_argument("log", nargs="?", help="file with the failed output ('-' for stdin)")
+    ap.add_argument("-c", "--config", "--flake", dest="config", metavar="PATH",
+                    help="your config: a flake (folder or path#host) or a configuration.nix (file or folder). "
+                         "Default: $NH_OS_FLAKE, $NH_FLAKE, $FLAKE, $NIXOS_CONFIG, a flake in /etc/nixos, "
+                         "nixos-config from $NIX_PATH, then /etc/nixos/configuration.nix")
+    ap.add_argument("-H", "--host", help="nixosConfigurations name, for flakes (default: from path#host, else hostname)")
+    ap.add_argument("-v", "--verbose", action="store_true", help="show the full Nix message and longer logs")
+    ap.add_argument("--list-rules", action="store_true", help="list known errors and exit")
+    ap.add_argument("--rule-id", action="store_true", help=argparse.SUPPRESS)  # for tests
+    ap.add_argument("--version", action="version", version=f"nixed-error {VERSION}")
+    args = ap.parse_args(argv)
+
+    rules = load_rules()
+    if args.list_rules:
+        for r in sorted(rules, key=lambda r: (-r.priority, r.id)):
+            print(f"{r.id:28} {r.title}{c('2', '  (yours)') if r.user else ''}")
+        print(c("2", f"\n{len(rules)} rules. Built-in: {BUILTIN_RULES}  Yours: {USER_RULES}"))
+        return 0
+
+    cfg = find_config(args.config, args.host)
+
+    text, source = None, ""
+    if args.log and args.log != "-":
+        text, source = Path(args.log).read_text(errors="replace"), f"read from {args.log}"
+    elif args.log == "-" or not sys.stdin.isatty():
+        text, source = sys.stdin.read(), "read from piped input"
+        if not text.strip():
+            text = None
+    if text is None:
+        if cfg.problem:
+            print(c("33", "\n? Couldn't find your config to re-check."))
+            print(wrap(f"{cfg.problem} Point nixed-error at it with --config (a flake folder, path#host, or "
+                       "a configuration.nix), or pipe in the output of the failed rebuild:", "  "))
+            print(pipe_hint("sudo nixos-rebuild switch"))
+            return 2
+        text, source, note = reproduce(cfg)
+        if text is None:
+            # nh needs a flake (or $NH_OS_FLAKE); a classic configuration.nix gets nixos-rebuild
+            switch = ("nh os switch" if os.environ.get("NH_OS_FLAKE") or (shutil.which("nh") and cfg.kind == "flake")
+                      else "sudo nixos-rebuild switch")
+            print(c("32", "\n✓ Couldn't reproduce a failure."))
+            print(wrap("Your config evaluates, nothing that needs building has a failed log, and no "
+                       f"systemd units are in a failed state.{note} If the rebuild failed while switching "
+                       "(for example installing the bootloader), pipe its output in instead:", "  "))
+            print(pipe_hint(switch))
+            return 0
+
+    flake = Flake(str(cfg.dir) if cfg.dir else None, load_inputs=not args.rule_id and cfg.kind == "flake")
+    flake.config = None if args.rule_id else cfg
+    rep = analyze(text, flake, rules)
+    rep.source = source
+    if args.rule_id:
+        print(rep.rule_id or "unknown", rep.blame)
+        return 0
+    if rep.rule_id is None:
+        rep.saved_to = save_unknown(text)
+    print_report(rep, args.verbose)
+    return 1
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(130)

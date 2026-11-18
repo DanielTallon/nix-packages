@@ -1,0 +1,16 @@
+warning: creating lock file "/home/fredrick/Develop/nix-packages/nixed-error/tests/.work/log-tests-failed/flake.lock": 
+• Added input 'nixpkgs':
+    'https://releases.nixos.org/nixpkgs/nixpkgs-26.11pre1088030.8edc0c72e3a3/nixexprs.tar.zst?narHash=sha256-6BIvCXtdLW4HQwsOGkgH444aB3vCbHypE9TA78ireh8%3D' (2026-10-08)
+this derivation will be built:
+  /nix/store/43n19qdmw82iphc0fdr5qjxf90bsy4x5-fancy-lib-1.2.3.drv
+building '/nix/store/43n19qdmw82iphc0fdr5qjxf90bsy4x5-fancy-lib-1.2.3.drv'...
+error: Cannot build '/nix/store/43n19qdmw82iphc0fdr5qjxf90bsy4x5-fancy-lib-1.2.3.drv'.
+       Reason: builder failed with exit code 1.
+       Output paths:
+         /nix/store/j8zyn64kppggfd51wllsly2inq9nyzqn-fancy-lib-1.2.3
+       Last 3 log lines:
+       > running test suite
+       > FAIL: test_parse (3 assertions)
+       > 2 tests failed
+       For full logs, run:
+         nix log /nix/store/43n19qdmw82iphc0fdr5qjxf90bsy4x5-fancy-lib-1.2.3.drv

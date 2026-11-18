@@ -1,0 +1,9 @@
+warning: creating lock file "/home/fredrick/Develop/nix-packages/nixed-error/tests/.work/hash-mismatch/flake.lock": 
+• Added input 'nixpkgs':
+    'https://releases.nixos.org/nixpkgs/nixpkgs-26.11pre1088030.8edc0c72e3a3/nixexprs.tar.zst?narHash=sha256-6BIvCXtdLW4HQwsOGkgH444aB3vCbHypE9TA78ireh8%3D' (2026-10-08)
+this derivation will be built:
+  /nix/store/sjfns4ay58g7lqwic373jqz2jcw7ggag-my-fixed-thing.drv
+building '/nix/store/sjfns4ay58g7lqwic373jqz2jcw7ggag-my-fixed-thing.drv'...
+error: hash mismatch in fixed-output derivation '/nix/store/sjfns4ay58g7lqwic373jqz2jcw7ggag-my-fixed-thing.drv':
+         specified: sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+            got:    sha256-WJG1tSLV3whtD/CxEPvZ0hu0/HFjrzTQgoai6Eb2vgM=

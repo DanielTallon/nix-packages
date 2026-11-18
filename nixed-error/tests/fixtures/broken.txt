@@ -1,0 +1,308 @@
+unpacking 'https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst' into the Git cache...
+warning: creating lock file "/home/fredrick/Develop/nix-packages/nixed-error/tests/.work/broken/flake.lock": 
+• Added input 'nixpkgs':
+    'https://releases.nixos.org/nixpkgs/nixpkgs-26.11pre1100332.901c54c08bdc/nixexprs.tar.zst?narHash=sha256-8fmbCL1FhpRvN6iEB9TejL5%2BuA5TP%2BrD90hLuYqi9Ss%3D' (2026-10-23)
+error:
+       … while calling the 'derivationStrict' builtin
+         at «nix-internal»/derivation-internal.nix:37:12:
+           36|
+           37|   strict = derivationStrict drvAttrs;
+             |            ^
+           38|
+
+       … while evaluating derivation 'nixos-system-nixos-26.11.20261023.901c54c'
+         whose name attribute is located at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/pkgs/stdenv/generic/make-derivation.nix:651:11
+
+       … while evaluating attribute 'buildCommand' of derivation 'nixos-system-nixos-26.11.20261023.901c54c'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/nixos/modules/system/activation/top-level.nix:63:7:
+           62|       allowSubstitutes = false;
+           63|       buildCommand = systemBuilder;
+             |       ^
+           64|
+
+       … while calling the 'getAttr' builtin
+         at «nix-internal»/derivation-internal.nix:50:17:
+           49|     value = commonAttrs // {
+           50|       outPath = builtins.getAttr outputName strict;
+             |                 ^
+           51|       drvPath = strict.drvPath;
+
+       … while calling the 'derivationStrict' builtin
+         at «nix-internal»/derivation-internal.nix:37:12:
+           36|
+           37|   strict = derivationStrict drvAttrs;
+             |            ^
+           38|
+
+       … while evaluating derivation 'etc'
+         whose name attribute is located at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/pkgs/stdenv/generic/make-derivation.nix:651:11
+
+       … while evaluating attribute 'buildCommand' of derivation 'etc'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/pkgs/build-support/trivial-builders/default.nix:88:9:
+           87|         inherit name;
+           88|         buildCommand = lib.toFunction buildCommand finalAttrs;
+             |         ^
+           89|         passAsFile = defaultPassAsFile ++ (userAttrs.passAsFile or [ ]);
+
+       … from call site
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/pkgs/build-support/trivial-builders/default.nix:88:24:
+           87|         inherit name;
+           88|         buildCommand = lib.toFunction buildCommand finalAttrs;
+             |                        ^
+           89|         passAsFile = defaultPassAsFile ++ (userAttrs.passAsFile or [ ]);
+
+       … while calling 'toFunction'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/trivial.nix:1211:16:
+         1210|   */
+         1211|   toFunction = v: if isFunction v then v else k: v;
+             |                ^
+         1212|
+
+       … while evaluating a branch condition
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/trivial.nix:1211:19:
+         1210|   */
+         1211|   toFunction = v: if isFunction v then v else k: v;
+             |                   ^
+         1212|
+
+       … from call site
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/trivial.nix:1211:22:
+         1210|   */
+         1211|   toFunction = v: if isFunction v then v else k: v;
+             |                      ^
+         1212|
+
+       … while calling anonymous lambda
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/trivial.nix:1131:5:
+         1130|     in
+         1131|     f: isFunction f || (f ? __functor && isFunction f.__functor && isFunction (f.__functor f));
+             |     ^
+         1132|
+
+       … in the left operand of the OR (||) operator
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/trivial.nix:1131:21:
+         1130|     in
+         1131|     f: isFunction f || (f ? __functor && isFunction f.__functor && isFunction (f.__functor f));
+             |                     ^
+         1132|
+
+       … while calling the 'isFunction' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/trivial.nix:1131:8:
+         1130|     in
+         1131|     f: isFunction f || (f ? __functor && isFunction f.__functor && isFunction (f.__functor f));
+             |        ^
+         1132|
+
+       … from call site
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/nixos/modules/system/etc/etc.nix:56:11:
+           55|         mkdir -p "$out/etc"
+           56|         ${lib.concatMapStringsSep "\n" (
+             |           ^
+           57|           etcEntry:
+
+       … while calling 'concatMapStringsSep'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/strings.nix:261:13:
+          260|   concatMapStringsSep =
+          261|     sep: f: list:
+             |             ^
+          262|     concatStringsSep sep (map f list);
+
+       … while calling the 'concatStringsSep' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/strings.nix:262:5:
+          261|     sep: f: list:
+          262|     concatStringsSep sep (map f list);
+             |     ^
+          263|
+
+       … while calling anonymous lambda
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/nixos/modules/system/etc/etc.nix:57:11:
+           56|         ${lib.concatMapStringsSep "\n" (
+           57|           etcEntry:
+             |           ^
+           58|           lib.escapeShellArgs [
+
+       … from call site
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/nixos/modules/system/etc/etc.nix:58:11:
+           57|           etcEntry:
+           58|           lib.escapeShellArgs [
+             |           ^
+           59|             "makeEtcEntry"
+
+       … while calling 'concatMapStringsSep'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/strings.nix:261:13:
+          260|   concatMapStringsSep =
+          261|     sep: f: list:
+             |             ^
+          262|     concatStringsSep sep (map f list);
+
+       … while calling the 'concatStringsSep' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/strings.nix:262:5:
+          261|     sep: f: list:
+          262|     concatStringsSep sep (map f list);
+             |     ^
+          263|
+
+       … while calling 'escapeShellArg'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/strings.nix:1220:5:
+         1219|   escapeShellArg =
+         1220|     arg:
+             |     ^
+         1221|     let
+
+       … while evaluating a branch condition
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/strings.nix:1231:5:
+         1230|     in
+         1231|     if match "[[:alnum:],._+:@%/-]+" string == null then
+             |     ^
+         1232|       "'${replaceString "'" "'\\''" string}'"
+
+       … while calling the 'match' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/strings.nix:1231:8:
+         1230|     in
+         1231|     if match "[[:alnum:],._+:@%/-]+" string == null then
+             |        ^
+         1232|       "'${replaceString "'" "'\\''" string}'"
+
+       … while evaluating the second argument passed to builtins.match
+
+       … while evaluating a branch condition
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/strings.nix:1229:9:
+         1228|         # dependency on the entire original source.
+         1229|         if isPath arg && !isStorePath arg then "${arg}" else toString arg;
+             |         ^
+         1230|     in
+
+       … in the left operand of the AND (&&) operator
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/strings.nix:1229:23:
+         1228|         # dependency on the entire original source.
+         1229|         if isPath arg && !isStorePath arg then "${arg}" else toString arg;
+             |                       ^
+         1230|     in
+
+       … while calling the 'isPath' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/strings.nix:1229:12:
+         1228|         # dependency on the entire original source.
+         1229|         if isPath arg && !isStorePath arg then "${arg}" else toString arg;
+             |            ^
+         1230|     in
+
+       … while calling the 'getAttr' builtin
+         at «nix-internal»/derivation-internal.nix:50:17:
+           49|     value = commonAttrs // {
+           50|       outPath = builtins.getAttr outputName strict;
+             |                 ^
+           51|       drvPath = strict.drvPath;
+
+       … while calling the 'derivationStrict' builtin
+         at «nix-internal»/derivation-internal.nix:37:12:
+           36|
+           37|   strict = derivationStrict drvAttrs;
+             |            ^
+           38|
+
+       … while evaluating derivation 'dbus-1'
+         whose name attribute is located at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/pkgs/stdenv/generic/make-derivation.nix:651:11
+
+       … while evaluating attribute 'serviceDirectories' of derivation 'dbus-1'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/pkgs/by-name/ma/makeDBusConf/package.nix:19:13:
+           18|   {
+           19|     inherit serviceDirectories suidHelper apparmor;
+             |             ^
+           20|     preferLocalBuild = true;
+
+       … while calling the 'getAttr' builtin
+         at «nix-internal»/derivation-internal.nix:50:17:
+           49|     value = commonAttrs // {
+           50|       outPath = builtins.getAttr outputName strict;
+             |                 ^
+           51|       drvPath = strict.drvPath;
+
+       … while calling the 'derivationStrict' builtin
+         at «nix-internal»/derivation-internal.nix:37:12:
+           36|
+           37|   strict = derivationStrict drvAttrs;
+             |            ^
+           38|
+
+       … while evaluating derivation 'system-path'
+         whose name attribute is located at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/pkgs/stdenv/generic/make-derivation.nix:651:11
+
+       … while evaluating attribute 'chosenOutputs' of derivation 'system-path'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/pkgs/build-support/buildenv/default.nix:113:9:
+          112|
+          113|         chosenOutputs = map (drv: {
+             |         ^
+          114|           paths =
+
+       … while evaluating list element at index 0
+
+       … while evaluating attribute 'paths'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/pkgs/build-support/buildenv/default.nix:114:11:
+          113|         chosenOutputs = map (drv: {
+          114|           paths =
+             |           ^
+          115|             # First add the usual output(s): respect if user has chosen explicitly,
+
+       … while evaluating list element at index 0
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/pkgs/build-support/buildenv/default.nix:114:11:
+          113|         chosenOutputs = map (drv: {
+          114|           paths =
+             |           ^
+          115|             # First add the usual output(s): respect if user has chosen explicitly,
+
+       … in the condition of the assert statement
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/customisation.nix:437:13:
+          436|           outPath =
+          437|             assert condition;
+             |             ^
+          438|             drv.${outputName}.outPath;
+
+       … while evaluating the attribute 'handled'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/pkgs/stdenv/generic/check-meta.nix:678:11:
+          677|           valid = if problems.error == null then "warn" else "no";
+          678|           handled = handle {
+             |           ^
+          679|             inherit attrs meta;
+
+       … from call site
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/pkgs/stdenv/generic/check-meta.nix:678:21:
+          677|           valid = if problems.error == null then "warn" else "no";
+          678|           handled = handle {
+             |                     ^
+          679|             inherit attrs meta;
+
+       … while calling 'handle'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/pkgs/stdenv/generic/check-meta.nix:623:5:
+          622|   handle =
+          623|     {
+             |     ^
+          624|       attrs,
+
+       … while calling the 'seq' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/pkgs/stdenv/generic/check-meta.nix:657:5:
+          656|     # Give all warnings first, then error if any
+          657|     seq (foldl' giveWarning null warnings) withError;
+             |     ^
+          658|
+
+       … while calling the 'throw' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/pkgs/stdenv/generic/check-meta.nix:645:13:
+          644|           else
+          645|             throw msg;
+             |             ^
+          646|
+
+       error: Refusing to evaluate package 'hello-2.12.3' in /nix/store/j3bg490nvcrv99cmjn10d2riy1028ny5-source/pkgs/by-name/he/hello/package.nix:58 because it has problems:
+       - broken: This package is broken.
+
+       See also https://nixos.org/manual/nixpkgs/unstable#sec-problems
+       To allow evaluation regardless, use:
+       - Nixpkgs import: import nixpkgs { config = <below code>; }
+       - NixOS: nixpkgs.config = <below code>;
+       - nix-* commands: Put below code in ~/.config/nixpkgs/config.nix
+
+         {
+           problems.handlers = {
+             hello.broken = "warn"; # or "ignore"
+           };
+         }

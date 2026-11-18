@@ -1,0 +1,22 @@
+warning: creating lock file "/home/fredrick/Develop/nix-packages/nixed-error/tests/.work/option-not-exist/flake.lock": 
+• Added input 'nixpkgs':
+    'https://releases.nixos.org/nixpkgs/nixpkgs-26.11pre1088030.8edc0c72e3a3/nixexprs.tar.zst?narHash=sha256-6BIvCXtdLW4HQwsOGkgH444aB3vCbHypE9TA78ireh8%3D' (2026-10-08)
+error:
+       … while calling the 'seq' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:404:18:
+          403|         options = checked options;
+          404|         config = checked (removeAttrs config [ "_module" ]);
+             |                  ^
+          405|         _module = checked (config._module);
+
+       … while calling the 'throw' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:376:13:
+          375|           else
+          376|             throw baseMsg
+             |             ^
+          377|         else
+
+       error: The option `services.openssh.enabel' does not exist. Definition values:
+       - In `/nix/store/rfy7h4j3fb1mhaaha89w53p8fq4zx2hw-source/hosts/case.nix': true
+
+       Did you mean `services.openssh.enable', `services.openssh.banner' or `services.openssh.macs'?

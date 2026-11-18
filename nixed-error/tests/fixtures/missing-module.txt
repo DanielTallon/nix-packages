@@ -1,0 +1,300 @@
+unpacking 'https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst' into the Git cache...
+warning: creating lock file "/home/fredrick/Develop/nix-packages/nixed-error/tests/.work/missing-module/flake.lock": 
+• Added input 'nixpkgs':
+    'https://releases.nixos.org/nixpkgs/nixpkgs-26.11pre1088030.8edc0c72e3a3/nixexprs.tar.zst?narHash=sha256-6BIvCXtdLW4HQwsOGkgH444aB3vCbHypE9TA78ireh8%3D' (2026-10-08)
+error:
+       … while calling the 'seq' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:404:18:
+          403|         options = checked options;
+          404|         config = checked (removeAttrs config [ "_module" ]);
+             |                  ^
+          405|         _module = checked (config._module);
+
+       … while evaluating a branch condition
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:307:9:
+          306|       checkUnmatched =
+          307|         if config._module.check && config._module.freeformType == null && merged.unmatchedDefns != [ ] then
+             |         ^
+          308|           let
+
+       … in the left operand of the AND (&&) operator
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:307:72:
+          306|       checkUnmatched =
+          307|         if config._module.check && config._module.freeformType == null && merged.unmatchedDefns != [ ] then
+             |                                                                        ^
+          308|           let
+
+       … in the left operand of the AND (&&) operator
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:307:33:
+          306|       checkUnmatched =
+          307|         if config._module.check && config._module.freeformType == null && merged.unmatchedDefns != [ ] then
+             |                                 ^
+          308|           let
+
+       … while evaluating a branch condition
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:298:9:
+          297|         in
+          298|         if declaredConfig._module.freeformType == null then
+             |         ^
+          299|           declaredConfig
+
+       … while calling the 'mapAttrs' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:285:13:
+          284|             in
+          285|             recurse options;
+             |             ^
+          286|
+
+       … while evaluating the attribute 'matchedOptions'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:978:15:
+          977|     {
+          978|       inherit matchedOptions;
+             |               ^
+          979|
+
+       … while calling the 'mapAttrs' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:968:24:
+          967|
+          968|       matchedOptions = mapAttrs (n: v: v.matchedOptions) resultsByName;
+             |                        ^
+          969|
+
+       … while calling the 'mapAttrs' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:890:23:
+          889|
+          890|       resultsByName = mapAttrs (
+             |                       ^
+          891|         name: decls:
+
+       … while calling the 'zipAttrsWith' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:806:21:
+          805|       # an attrset 'name' => list of submodules that declare ‘name’.
+          806|       declsByName = zipAttrs (
+             |                     ^
+          807|         map (
+
+       … while calling the 'map' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:807:9:
+          806|       declsByName = zipAttrs (
+          807|         map (
+             |         ^
+          808|           module:
+
+       … from call site
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:273:37:
+          272|
+          273|       merged = mergeModules prefix (reverseList (doCollect { }).modules);
+             |                                     ^
+          274|
+
+       … while calling 'reverseList'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/lists.nix:1139:5:
+         1138|   reverseList =
+         1139|     xs:
+             |     ^
+         1140|     let
+
+       … while calling the 'genList' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/lists.nix:1144:5:
+         1143|     in
+         1144|     genList (n: elemAt xs (lastIndex - n)) (lastIndex + 1);
+             |     ^
+         1145|
+
+       … while evaluating the second argument passed to builtins.genList
+
+       … while calling the 'sub' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/lists.nix:1142:29:
+         1141|       # subtract one to save an __sub call on every element
+         1142|       lastIndex = length xs - 1;
+             |                             ^
+         1143|     in
+
+       … while calling the 'length' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/lists.nix:1142:19:
+         1141|       # subtract one to save an __sub call on every element
+         1142|       lastIndex = length xs - 1;
+             |                   ^
+         1143|     in
+
+       … while evaluating the attribute 'modules'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:604:7:
+          603|     modulesPath: initialModules: args: {
+          604|       modules = filterModules modulesPath (collectStructuredModules unknownModule "" initialModules args);
+             |       ^
+          605|       # Intentionally not shared with `modules` above: this allows
+
+       … from call site
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:604:17:
+          603|     modulesPath: initialModules: args: {
+          604|       modules = filterModules modulesPath (collectStructuredModules unknownModule "" initialModules args);
+             |                 ^
+          605|       # Intentionally not shared with `modules` above: this allows
+
+       … while calling 'filterModules'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:568:9:
+          567|         modulesPath:
+          568|         { disabled, modules }:
+             |         ^
+          569|         let
+
+       … while calling the 'catAttrs' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:573:9:
+          572|         in
+          573|         catAttrs "module" (
+             |         ^
+          574|           genericClosure (
+
+       … while calling the 'genericClosure' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:574:11:
+          573|         catAttrs "module" (
+          574|           genericClosure (
+             |           ^
+          575|             if disabled == [ ] then
+
+       … while evaluating a branch condition
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:575:13:
+          574|           genericClosure (
+          575|             if disabled == [ ] then
+             |             ^
+          576|               {
+
+       … while calling the 'concatLists' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:529:24:
+          528|           collectResults = modules: {
+          529|             disabled = concatLists (catAttrs "disabled" modules);
+             |                        ^
+          530|             inherit modules;
+
+       … while evaluating the attribute 'disabled'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:529:13:
+          528|           collectResults = modules: {
+          529|             disabled = concatLists (catAttrs "disabled" modules);
+             |             ^
+          530|             inherit modules;
+
+       … while calling the 'concatLists' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:529:24:
+          528|           collectResults = modules: {
+          529|             disabled = concatLists (catAttrs "disabled" modules);
+             |                        ^
+          530|             inherit modules;
+
+       … while evaluating the attribute 'disabled'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:529:13:
+          528|           collectResults = modules: {
+          529|             disabled = concatLists (catAttrs "disabled" modules);
+             |             ^
+          530|             inherit modules;
+
+       … while calling the 'concatLists' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:529:24:
+          528|           collectResults = modules: {
+          529|             disabled = concatLists (catAttrs "disabled" modules);
+             |                        ^
+          530|             inherit modules;
+
+       … while evaluating a branch condition
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:547:19:
+          546|                 (
+          547|                   if module.disabledModules != [ ] then
+             |                   ^
+          548|                     [
+
+       … from call site
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:538:24:
+          537|             let
+          538|               module = checkModule (loadModule args parentFile "${parentKey}:anon-${toString n}" x);
+             |                        ^
+          539|               collectedImports = collectStructuredModules module._file module.key module.imports args;
+
+       … while calling anonymous lambda
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:457:11:
+          456|         if class != null then
+          457|           m:
+             |           ^
+          458|           if m._class == null || m._class == class then
+
+       … while evaluating a branch condition
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:458:11:
+          457|           m:
+          458|           if m._class == null || m._class == class then
+             |           ^
+          459|             m
+
+       … in the left operand of the OR (||) operator
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:458:31:
+          457|           m:
+          458|           if m._class == null || m._class == class then
+             |                               ^
+          459|             m
+
+       … from call site
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:538:37:
+          537|             let
+          538|               module = checkModule (loadModule args parentFile "${parentKey}:anon-${toString n}" x);
+             |                                     ^
+          539|               collectedImports = collectStructuredModules module._file module.key module.imports args;
+
+       … while calling 'loadModule'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:422:42:
+          421|       loadModule =
+          422|         args: fallbackFile: fallbackKey: m:
+             |                                          ^
+          423|         if isFunction m then
+
+       … while evaluating a branch condition
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:423:9:
+          422|         args: fallbackFile: fallbackKey: m:
+          423|         if isFunction m then
+             |         ^
+          424|           unifyModuleSyntax fallbackFile fallbackKey (applyModuleArgs fallbackKey m args)
+
+       … from call site
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:423:12:
+          422|         args: fallbackFile: fallbackKey: m:
+          423|         if isFunction m then
+             |            ^
+          424|           unifyModuleSyntax fallbackFile fallbackKey (applyModuleArgs fallbackKey m args)
+
+       … while calling anonymous lambda
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/trivial.nix:1131:5:
+         1130|     in
+         1131|     f: isFunction f || (f ? __functor && isFunction f.__functor && isFunction (f.__functor f));
+             |     ^
+         1132|
+
+       … in the left operand of the OR (||) operator
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/trivial.nix:1131:21:
+         1130|     in
+         1131|     f: isFunction f || (f ? __functor && isFunction f.__functor && isFunction (f.__functor f));
+             |                     ^
+         1132|
+
+       … while calling the 'isFunction' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/trivial.nix:1131:8:
+         1130|     in
+         1131|     f: isFunction f || (f ? __functor && isFunction f.__functor && isFunction (f.__functor f));
+             |        ^
+         1132|
+
+       … while calling the 'elemAt' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/lists.nix:346:43:
+          345|   */
+          346|   imap1 = f: list: genList (n: f (n + 1) (elemAt list n)) (length list);
+             |                                           ^
+          347|
+
+       … while evaluating the attribute 'flake.modules.nixos.chaotic'
+         at /home/fredrick/Develop/nix-packages/nixed-error/tests/.work/missing-module/hosts/case.nix:11:3:
+           10| let
+           11|   config.flake.modules.nixos.cavalier = { };
+             |   ^
+           12| in
+
+       error: attribute 'chaotic' missing
+       at /home/fredrick/Develop/nix-packages/nixed-error/tests/.work/missing-module/hosts/case.nix:16:5:
+           15|     config.flake.modules.nixos.cavalier
+           16|     config.flake.modules.nixos.chaotic
+             |     ^
+           17|   ];

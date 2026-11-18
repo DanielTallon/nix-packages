@@ -283,9 +283,8 @@ wrong string).
 doesn't apply — just check back here to get the updated `version`. If you
 have it as a flake input, `nix flake update nix-packages` pulls in whatever's on `main`.
 
-`nixed-error/nixed-error.nix` is generated from the nixed-error project
-(`export-nix.py` there), so regenerate it rather than editing the embedded
-script by hand.
+`nixed-error` is my own project too, and its source lives in `nixed-error/`
+itself (see its README and CLAUDE.md), so there is no upstream to bump.
 
 `proton-wineland` and `brave-origin` update themselves: scheduled GitHub Actions
 bump their `sources.json` (see proton-wineland's section below), so there's
@@ -308,7 +307,10 @@ nix-packages/
 ├── boot-gardener/
 │   └── boot-gardener.nix
 ├── nixed-error/
-│   └── nixed-error.nix
+│   ├── nixed-error.nix
+│   ├── nixed_error.py              # the tool itself
+│   ├── rules.toml
+│   └── tests/
 ├── wallpaperpicker/
 │   ├── wallpaperpicker.nix
 │   ├── *.patch                     # trash, transitions, fill mode, preview
@@ -414,8 +416,8 @@ Wineland 11.0-20260930 and newer restores DLSS, frame generation, ray tracing an
 
 ## nti
 
-**N**ix **T**emporary **I**nstall, or **N**ot **T**hat **I**nto, depending on how it goes.
-For a program you want to try for a while without adding it to your system config
+**N**ix **T**emporary **I**nstall.
+Use this for a program you want to try for a while without adding it to your system config
 and rebuilding:
 
 1. Try it once, nothing installed: `nti try x-nix` (a shell with it in it).

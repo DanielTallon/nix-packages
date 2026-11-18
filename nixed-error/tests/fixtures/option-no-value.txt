@@ -1,0 +1,551 @@
+warning: creating lock file "/home/fredrick/Develop/nix-packages/nixed-error/tests/.work/option-no-value/flake.lock": 
+• Added input 'nixpkgs':
+    'https://releases.nixos.org/nixpkgs/nixpkgs-26.11pre1088030.8edc0c72e3a3/nixexprs.tar.zst?narHash=sha256-6BIvCXtdLW4HQwsOGkgH444aB3vCbHypE9TA78ireh8%3D' (2026-10-08)
+error:
+       … while calling anonymous lambda
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/attrsets.nix:1706:17:
+         1705|         zipAttrsWith (
+         1706|           name: values:
+             |                 ^
+         1707|           let
+
+       … while calling the 'head' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/attrsets.nix:1711:13:
+         1710|           if length values == 1 || pred here (elemAt values 1) (head values) then
+         1711|             head values
+             |             ^
+         1712|           else
+
+       … while calling anonymous lambda
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:283:38:
+          282|             let
+          283|               recurse = mapAttrs (n: v: if isOption v then v.value else recurse v);
+             |                                      ^
+          284|             in
+
+       … while evaluating the attribute 'value'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1181:7:
+         1180|     // {
+         1181|       value = addErrorContext "while evaluating the option `${showOption loc}':" (
+             |       ^
+         1182|         # Apply the 'apply' function to the merged value. This allows options to
+
+       … while evaluating the option `system.build.toplevel':
+
+       … while evaluating the attribute 'mergedValue'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1276:5:
+         1275|     # Type-check the remaining definitions, and merge them. Or throw if no definitions.
+         1276|     mergedValue =
+             |     ^
+         1277|       if isDefined then
+
+       … while evaluating a branch condition
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1277:7:
+         1276|     mergedValue =
+         1277|       if isDefined then
+             |       ^
+         1278|         if type.merge ? v2 then
+
+       … while evaluating a branch condition
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1231:7:
+         1230|       # original singleton straight to the type merge.
+         1231|       if
+             |       ^
+         1232|         length defs == 1
+
+       … in the right operand of the AND (&&) operator
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1233:9:
+         1232|         length defs == 1
+         1233|         && addErrorContext "while evaluating definitions from `${(head defs).file}':" (
+             |         ^
+         1234|           !(head defs).value ? _type
+
+       … while evaluating definitions from `/nix/store/rfcpg2ryywgma7wlswjzna99g9gq8laq-source/nixos/modules/system/activation/top-level.nix':
+
+       … in the argument of the not operator
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1234:12:
+         1233|         && addErrorContext "while evaluating definitions from `${(head defs).file}':" (
+         1234|           !(head defs).value ? _type
+             |            ^
+         1235|         )
+
+       … while evaluating the attribute 'value'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:866:21:
+          865|             inherit (module) file;
+          866|             inherit value;
+             |                     ^
+          867|           }) module.config
+
+       … from call site
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/nixos/modules/system/activation/top-level.nix:78:26:
+           77|   # Handle assertions and warnings
+           78|   baseSystemAssertWarn = lib.asserts.checkAssertWarn config.assertions config.warnings baseSystem;
+             |                          ^
+           79|
+
+       … while calling 'checkAssertWarn'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/asserts.nix:196:27:
+          195|   checkAssertWarn =
+          196|     assertions: warnings: val:
+             |                           ^
+          197|     let
+
+       … while evaluating a branch condition
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/asserts.nix:200:5:
+          199|     in
+          200|     if failedAssertions != [ ] then
+             |     ^
+          201|       throw "\nFailed assertions:\n${concatStringsSep "\n" (map (x: "- ${x}") failedAssertions)}"
+
+       … while calling the 'catAttrs' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/asserts.nix:198:26:
+          197|     let
+          198|       failedAssertions = catAttrs "message" (filter (x: !x.assertion) assertions);
+             |                          ^
+          199|     in
+
+       … while calling the 'filter' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/asserts.nix:198:46:
+          197|     let
+          198|       failedAssertions = catAttrs "message" (filter (x: !x.assertion) assertions);
+             |                                              ^
+          199|     in
+
+       … from call site
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/nixos/modules/system/activation/top-level.nix:78:54:
+           77|   # Handle assertions and warnings
+           78|   baseSystemAssertWarn = lib.asserts.checkAssertWarn config.assertions config.warnings baseSystem;
+             |                                                      ^
+           79|
+
+       … while calling anonymous lambda
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:283:38:
+          282|             let
+          283|               recurse = mapAttrs (n: v: if isOption v then v.value else recurse v);
+             |                                      ^
+          284|             in
+
+       … while evaluating the attribute 'value'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1181:7:
+         1180|     // {
+         1181|       value = addErrorContext "while evaluating the option `${showOption loc}':" (
+             |       ^
+         1182|         # Apply the 'apply' function to the merged value. This allows options to
+
+       … while evaluating the option `assertions':
+
+       … while evaluating the attribute 'mergedValue'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1276:5:
+         1275|     # Type-check the remaining definitions, and merge them. Or throw if no definitions.
+         1276|     mergedValue =
+             |     ^
+         1277|       if isDefined then
+
+       … while evaluating a branch condition
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1277:7:
+         1276|     mergedValue =
+         1277|       if isDefined then
+             |       ^
+         1278|         if type.merge ? v2 then
+
+       … while evaluating the attribute 'values'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1270:11:
+         1269|         {
+         1270|           values = defsSorted;
+             |           ^
+         1271|           inherit (defsFiltered) highestPrio;
+
+       … while evaluating a branch condition
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1264:13:
+         1263|             # Avoid sorting if we don't have to.
+         1264|             if any (def: def.value._type or "" == "order") defsFiltered.values then
+             |             ^
+         1265|               sortProperties defsFiltered.values
+
+       … while calling the 'any' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1264:16:
+         1263|             # Avoid sorting if we don't have to.
+         1264|             if any (def: def.value._type or "" == "order") defsFiltered.values then
+             |                ^
+         1265|               sortProperties defsFiltered.values
+
+       … from call site
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1259:26:
+         1258|           # Process mkOverride properties.
+         1259|           defsFiltered = filterOverrides' defsNormalized;
+             |                          ^
+         1260|
+
+       … while calling anonymous lambda
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1460:5:
+         1459|     in
+         1460|     defs:
+             |     ^
+         1461|     # Optimize for the singleton case, equivalent to the `else` clause.
+
+       … while evaluating a branch condition
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1462:5:
+         1461|     # Optimize for the singleton case, equivalent to the `else` clause.
+         1462|     if length defs == 1 then
+             |     ^
+         1463|       {
+
+       … while calling the 'length' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1462:8:
+         1461|     # Optimize for the singleton case, equivalent to the `else` clause.
+         1462|     if length defs == 1 then
+             |        ^
+         1463|       {
+
+       … while calling the 'concatMap' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1244:28:
+         1243|           # Process mkMerge and mkIf properties.
+         1244|           defsNormalized = concatMap (
+             |                            ^
+         1245|             m:
+
+       … while calling anonymous lambda
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1245:13:
+         1244|           defsNormalized = concatMap (
+         1245|             m:
+             |             ^
+         1246|             map (
+
+       … while calling the 'map' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1246:13:
+         1245|             m:
+         1246|             map (
+             |             ^
+         1247|               value:
+
+       … while evaluating definitions from `/nix/store/rfcpg2ryywgma7wlswjzna99g9gq8laq-source/nixos/modules/tasks/filesystems/zfs.nix':
+
+       … from call site
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1255:82:
+         1254|                 }
+         1255|             ) (addErrorContext "while evaluating definitions from `${m.file}':" (dischargeProperties m.value))
+             |                                                                                  ^
+         1256|           ) defs;
+
+       … while calling 'dischargeProperties'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1411:5:
+         1410|   dischargeProperties =
+         1411|     def:
+             |     ^
+         1412|     if def ? _type then
+
+       … while evaluating a branch condition
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1414:9:
+         1413|       if def._type == "if" then
+         1414|         if isBool def.condition then
+             |         ^
+         1415|           if def.condition then dischargeProperties def.content else [ ]
+
+       … while calling the 'isBool' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1414:12:
+         1413|       if def._type == "if" then
+         1414|         if isBool def.condition then
+             |            ^
+         1415|           if def.condition then dischargeProperties def.content else [ ]
+
+       … while evaluating the attribute 'condition'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1581:13:
+         1580|     _type = "if";
+         1581|     inherit condition content;
+             |             ^
+         1582|   };
+
+       … while evaluating the attribute 'condition'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1581:13:
+         1580|     _type = "if";
+         1581|     inherit condition content;
+             |             ^
+         1582|   };
+
+       … from call site
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/nixos/modules/tasks/filesystems/zfs.nix:667:15:
+          666|   config = lib.mkMerge [
+          667|     (lib.mkIf cfgZfs.enabled {
+             |               ^
+          668|       assertions = [
+
+       … while calling anonymous lambda
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:283:38:
+          282|             let
+          283|               recurse = mapAttrs (n: v: if isOption v then v.value else recurse v);
+             |                                      ^
+          284|             in
+
+       … while evaluating the attribute 'value'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1181:7:
+         1180|     // {
+         1181|       value = addErrorContext "while evaluating the option `${showOption loc}':" (
+             |       ^
+         1182|         # Apply the 'apply' function to the merged value. This allows options to
+
+       … while evaluating the option `boot.zfs.enabled':
+
+       … while evaluating the attribute 'mergedValue'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1276:5:
+         1275|     # Type-check the remaining definitions, and merge them. Or throw if no definitions.
+         1276|     mergedValue =
+             |     ^
+         1277|       if isDefined then
+
+       … while evaluating a branch condition
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1277:7:
+         1276|     mergedValue =
+         1277|       if isDefined then
+             |       ^
+         1278|         if type.merge ? v2 then
+
+       … while evaluating the attribute 'values'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1270:11:
+         1269|         {
+         1270|           values = defsSorted;
+             |           ^
+         1271|           inherit (defsFiltered) highestPrio;
+
+       … while evaluating a branch condition
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1264:13:
+         1263|             # Avoid sorting if we don't have to.
+         1264|             if any (def: def.value._type or "" == "order") defsFiltered.values then
+             |             ^
+         1265|               sortProperties defsFiltered.values
+
+       … while calling the 'any' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1264:16:
+         1263|             # Avoid sorting if we don't have to.
+         1264|             if any (def: def.value._type or "" == "order") defsFiltered.values then
+             |                ^
+         1265|               sortProperties defsFiltered.values
+
+       … while calling anonymous lambda
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1264:21:
+         1263|             # Avoid sorting if we don't have to.
+         1264|             if any (def: def.value._type or "" == "order") defsFiltered.values then
+             |                     ^
+         1265|               sortProperties defsFiltered.values
+
+       … while evaluating the attribute 'value._type'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1458:67:
+         1457|       strip =
+         1458|         def: if def.value._type or "" == "override" then def // { value = def.value.content; } else def;
+             |                                                                   ^
+         1459|     in
+
+       … while evaluating the attribute 'value.content'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1638:22:
+         1637|     _type = "override";
+         1638|     inherit priority content;
+             |                      ^
+         1639|   };
+
+       … while evaluating the attribute 'default'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/nixos/modules/tasks/filesystems/zfs.nix:307:9:
+          306|         type = lib.types.bool;
+          307|         default = inInitrd || inSystem;
+             |         ^
+          308|         defaultText = lib.literalMD "`true` if ZFS filesystem support is enabled";
+
+       … in the right operand of the OR (||) operator
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/nixos/modules/tasks/filesystems/zfs.nix:307:28:
+          306|         type = lib.types.bool;
+          307|         default = inInitrd || inSystem;
+             |                            ^
+          308|         defaultText = lib.literalMD "`true` if ZFS filesystem support is enabled";
+
+       … from call site
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/nixos/modules/tasks/filesystems/zfs.nix:33:14:
+           32|   inInitrd = config.boot.initrd.supportedFilesystems.zfs or false;
+           33|   inSystem = config.boot.supportedFilesystems.zfs or false;
+             |              ^
+           34|
+
+       … while calling anonymous lambda
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:283:38:
+          282|             let
+          283|               recurse = mapAttrs (n: v: if isOption v then v.value else recurse v);
+             |                                      ^
+          284|             in
+
+       … while evaluating the attribute 'value'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1181:7:
+         1180|     // {
+         1181|       value = addErrorContext "while evaluating the option `${showOption loc}':" (
+             |       ^
+         1182|         # Apply the 'apply' function to the merged value. This allows options to
+
+       … while evaluating the option `boot.supportedFilesystems':
+
+       … while evaluating the attribute 'mergedValue'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1276:5:
+         1275|     # Type-check the remaining definitions, and merge them. Or throw if no definitions.
+         1276|     mergedValue =
+             |     ^
+         1277|       if isDefined then
+
+       … while evaluating a branch condition
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1281:11:
+         1280|           # .headError is either not-present, null, or a string describing the error
+         1281|           if checkedAndMerged.headError or null != null then
+             |           ^
+         1282|             throw "A definition for option `${showOption loc}' is not of type `${type.description}'. TypeError: ${checkedAndMerged.headError.message}"
+
+       … while evaluating the attribute 'headError'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/types.nix:1027:13:
+         1026|           {
+         1027|             headError = checkDefsForError check loc defs;
+             |             ^
+         1028|             value = mapAttrs (
+
+       … from call site
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/types.nix:1027:25:
+         1026|           {
+         1027|             headError = checkDefsForError check loc defs;
+             |                         ^
+         1028|             value = mapAttrs (
+
+       … while calling 'checkDefsForError'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/types.nix:114:17:
+          113|   checkDefsForError =
+          114|     check: loc: defs:
+             |                 ^
+          115|     if all (def: check def.value) defs then
+
+       … while evaluating a branch condition
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/types.nix:115:5:
+          114|     check: loc: defs:
+          115|     if all (def: check def.value) defs then
+             |     ^
+          116|       null
+
+       … while calling the 'all' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/types.nix:115:8:
+          114|     check: loc: defs:
+          115|     if all (def: check def.value) defs then
+             |        ^
+          116|       null
+
+       … while calling anonymous lambda
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/types.nix:115:13:
+          114|     check: loc: defs:
+          115|     if all (def: check def.value) defs then
+             |             ^
+          116|       null
+
+       … while calling a functor (an attribute set with a '__functor' attribute)
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/types.nix:115:18:
+          114|     check: loc: defs:
+          115|     if all (def: check def.value) defs then
+             |                  ^
+          116|       null
+
+       … while calling the 'isAttrs' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/types.nix:1006:9:
+         1005|       check = {
+         1006|         __functor = _self: isAttrs;
+             |         ^
+         1007|         isV2MergeCoherent = true;
+
+       … while evaluating the attribute 'value'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/types.nix:1806:19:
+         1805|                 // {
+         1806|                   value =
+             |                   ^
+         1807|                     if coercedType.merge ? v2 then
+
+       … from call site
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/types.nix:1816:56:
+         1815|                       in
+         1816|                       if merged.headError == null then coerceFunc def.value else def.value
+             |                                                        ^
+         1817|                     else if coercedType.check def.value then
+
+       … while calling anonymous lambda
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/nixos/modules/tasks/filesystems.nix:39:5:
+           38|   attrNamesToTrue = types.coercedTo (types.listOf types.str) (
+           39|     enabledList: lib.genAttrs enabledList (_attrName: true)
+             |     ^
+           40|   ) (types.attrsOf types.bool);
+
+       … from call site
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/nixos/modules/tasks/filesystems.nix:39:18:
+           38|   attrNamesToTrue = types.coercedTo (types.listOf types.str) (
+           39|     enabledList: lib.genAttrs enabledList (_attrName: true)
+             |                  ^
+           40|   ) (types.attrsOf types.bool);
+
+       … while calling 'genAttrs'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/attrsets.nix:1339:12:
+         1338|   genAttrs =
+         1339|     names: f:
+             |            ^
+         1340|     listToAttrs (
+
+       … while calling the 'listToAttrs' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/attrsets.nix:1340:5:
+         1339|     names: f:
+         1340|     listToAttrs (
+             |     ^
+         1341|       map (name: {
+
+       … while evaluating the `name` attribute of an element of the list passed to builtins.listToAttrs
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/attrsets.nix:1342:17:
+         1341|       map (name: {
+         1342|         inherit name;
+             |                 ^
+         1343|         value = f name;
+
+       … from call site
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/attrsets.nix:1342:17:
+         1341|       map (name: {
+         1342|         inherit name;
+             |                 ^
+         1343|         value = f name;
+
+       … while calling anonymous lambda
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/nixos/modules/tasks/filesystems.nix:491:38:
+          490|
+          491|     boot.supportedFilesystems = map (fs: fs.fsType) fileSystems;
+             |                                      ^
+          492|
+
+       … from call site
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/nixos/modules/tasks/filesystems.nix:491:42:
+          490|
+          491|     boot.supportedFilesystems = map (fs: fs.fsType) fileSystems;
+             |                                          ^
+          492|
+
+       … while calling anonymous lambda
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:283:38:
+          282|             let
+          283|               recurse = mapAttrs (n: v: if isOption v then v.value else recurse v);
+             |                                      ^
+          284|             in
+
+       … while evaluating the attribute 'value'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1181:7:
+         1180|     // {
+         1181|       value = addErrorContext "while evaluating the option `${showOption loc}':" (
+             |       ^
+         1182|         # Apply the 'apply' function to the merged value. This allows options to
+
+       … while evaluating the option `fileSystems."/data".fsType':
+
+       … while evaluating the attribute 'mergedValue'
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1276:5:
+         1275|     # Type-check the remaining definitions, and merge them. Or throw if no definitions.
+         1276|     mergedValue =
+             |     ^
+         1277|       if isDefined then
+
+       … while calling the 'throw' builtin
+         at «https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst»/lib/modules.nix:1297:9:
+         1296|         # handling.  If changed here, please change it there too.)
+         1297|         throw
+             |         ^
+         1298|           "The option `${showOption loc}' was accessed but has no value defined. Try setting the option.";
+
+       error: The option `fileSystems."/data".fsType' was accessed but has no value defined. Try setting the option.

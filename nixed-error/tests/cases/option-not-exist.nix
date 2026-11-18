@@ -1,0 +1,4 @@
+{ ... }:
+{
+  services.openssh.enabel = true;
+}

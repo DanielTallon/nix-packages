@@ -1,0 +1,22 @@
+Checking switch inhibitors... done
+stopping the following units: accounts-daemon.service, nvidia-persistenced.service, polkit.service
+activating the configuration...
+reloading user units for fredrick...
+restarting sysinit-reactivation.target
+restarting the following units: home-manager-fredrick.service, nix-daemon.service
+starting the following units: accounts-daemon.service, nvidia-persistenced.service, polkit.service
+Failed to start nvidia-persistenced.service
+the following new units were started: sysinit-reactivation.target
+warning: the following units failed: nixed-gpu-perf.service, nvidia-persistenced.service
+× nixed-gpu-perf.service - NVIDIA persistence mode
+     Loaded: loaded (/etc/systemd/system/nixed-gpu-perf.service; enabled; preset: ignored)
+     Active: failed (Result: exit-code) since Thu 2026-10-15 05:54:12 EDT; 180ms ago
+    Process: 4121 ExecStart=/run/current-system/sw/bin/nvidia-smi -pm 1 (code=exited, status=18)
+   Main PID: 4121 (code=exited, status=18)
+
+Oct 15 05:54:12 nixos systemd[1]: Starting NVIDIA persistence mode...
+Oct 15 05:54:12 nixos nvidia-smi[4121]: Failed to initialize NVML: Driver/library version mismatch
+Oct 15 05:54:12 nixos nvidia-smi[4121]: NVML library version: 615.78
+Oct 15 05:54:12 nixos systemd[1]: nixed-gpu-perf.service: Main process exited, code=exited, status=18/n/a
+Oct 15 05:54:12 nixos systemd[1]: nixed-gpu-perf.service: Failed with result 'exit-code'.
+Oct 15 05:54:12 nixos systemd[1]: Failed to start NVIDIA persistence mode.

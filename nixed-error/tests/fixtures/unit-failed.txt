@@ -1,0 +1,38 @@
+building the system configuration...
+these 5 derivations will be built:
+  /nix/store/qg9vk9jzj1fq725qbmkqdhiif4kbx50x-unit-nixed-test.service.drv
+  /nix/store/8mxl01dx1bpl0fc9fdrrsaf6m7v799hi-system-units.drv
+  /nix/store/x07ns5zajkclipiqn0p5sd3rimalbhd-etc.drv
+  /nix/store/syv8ay8q7kcn79ccahla68kwyi3d546n-activate.drv
+  /nix/store/73bapg2ly79vg6mrqaxpjdvg4chx1cxy-nixos-system-nixos-26.05.9334.93108a538f07.drv
+building '/nix/store/qg9vk9jzj1fq725qbmkqdhiif4kbx50x-unit-nixed-test.service.drv'...
+building '/nix/store/8mxl01dx1bpl0fc9fdrrsaf6m7v799hi-system-units.drv'...
+building '/nix/store/x07ns5zajkclipiqn0p5sd3rimalbhd-etc.drv'...
+building '/nix/store/syv8ay8q7kcn79ccahla68kwyi3d546n-activate.drv'...
+building '/nix/store/73bapg2ly79vg6mrqaxpjdvg4chx1cxy-nixos-system-nixos-26.05.9334.93108a538f07.drv'...
+structuredAttrs is enabled
+Checking switch inhibitors... done
+activating the configuration...
+setting up /etc...
+reloading user units for testing...
+restarting the following user units: nixos-activation.service
+restarting sysinit-reactivation.target
+the following new units were started: NetworkManager-dispatcher.service
+warning: the following units failed: nixed-test.service
+× nixed-test.service - Diliberately failing unit for nixed-error
+     Loaded: loaded (/etc/systemd/system/nixed-test.service; enabled; preset: ignored)
+     Active: failed (Result: exit-code) since Tue 2026-10-13 22:31:03 EDT; 271ms ago
+ Invocation: a12aa0076cf14d68affaecae6b07479b
+    Process: 6797 ExecStart=/nix/store/yisa2lg79zcvgk4ck4yr6r0lz6j63hs3-bash-interactive-5.3p9/bin/bash -c echo something broke >&2; exit 1 (code=exited, status=1/FAILURE)
+   Main PID: 6797 (code=exited, status=1/FAILURE)
+         IP: 0B in, 0B out
+         IO: 0B read, 0B written
+   Mem peak: 2.2M
+        CPU: 4ms
+
+Oct 13 22:31:03 nixos systemd[1]: Starting Diliberately failing unit for nixed-error...
+Oct 13 22:31:03 nixos bash[6797]: something broke
+Oct 13 22:31:03 nixos systemd[1]: nixed-test.service: Main process exited, code=exited, status=1/FAILURE
+Oct 13 22:31:03 nixos systemd[1]: nixed-test.service: Failed with result 'exit-code'.
+Oct 13 22:31:03 nixos systemd[1]: Failed to start Diliberately failing unit for nixed-error.
+Command 'systemd-run -E LOCALE_ARCHIVE -E NIXOS_INSTALL_BOOTLOADER -E NIXOS_NO_CHECK --collect --no-ask-password --pipe --quiet --service-type=exec --unit=nixos-rebuild-switch-to-configuration /nix/store/hzgd74v40l687bbh88sw3yqqb49r58j3-nixos-system-nixos-26.05.9334.93108a538f07/bin/switch-to-configuration switch' returned non-zero exit status 4.

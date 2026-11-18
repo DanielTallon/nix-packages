@@ -1,0 +1,26 @@
+error:
+       … while evaluating the attribute 'config.system.build.toplevel'
+         at /nix/store/r5l65vg4gi4dnx54zkwagfb8jmlqniy5-source/lib/modules.nix:404:9:
+          403|         options = checked options;
+          404|         config = checked (removeAttrs config [ "_module" ]);
+             |         ^
+          405|         _module = checked (config._module);
+
+       … while calling the 'seq' builtin
+         at /nix/store/r5l65vg4gi4dnx54zkwagfb8jmlqniy5-source/lib/modules.nix:404:18:
+          403|         options = checked options;
+          404|         config = checked (removeAttrs config [ "_module" ]);
+             |                  ^
+          405|         _module = checked (config._module);
+
+       … while calling the 'throw' builtin
+         at /nix/store/r5l65vg4gi4dnx54zkwagfb8jmlqniy5-source/lib/modules.nix:376:13:
+          375|           else
+          376|             throw baseMsg
+             |             ^
+          377|         else
+
+       error: The option `services.openssh.enabel' does not exist. Definition values:
+       - In `/home/fredrick/Develop/nix-packages/nixed-error/tests/.work/option-not-exist--classic/case.nix': true
+
+       Did you mean `services.openssh.enable', `services.openssh.banner' or `services.openssh.macs'?
