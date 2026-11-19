@@ -478,7 +478,9 @@ once an hour).
 **Shell setup:** some programs only work once your shell runs their setup line: mcfly,
 atuin and television (Ctrl+R history search), zoxide, starship, direnv, fzf, mise, broot,
 navi, fnm, nix-your-shell, pay-respects, carapace. On every sync, nti writes those lines for
-whatever is on the list, and takes them out again when you drop the program.
+whatever is on the list, and takes them out again when you drop the program. `mcfly-fzf`
+only works on top of `mcfly`: if `mcfly` isn't on the list, nti leaves `mcfly-fzf`'s setup
+out and says so on every sync, so drop the two together (`nti drop mcfly mcfly-fzf`).
 
 - **fish:** `~/.config/fish/conf.d/nti.fish`, which fish loads by itself. Open a new terminal.
 - **bash and zsh:** `~/.config/nti/hooks.bash` and `hooks.zsh`. These need one line in

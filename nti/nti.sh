@@ -63,6 +63,13 @@ pay-respects    pay-respects    fish | bash | zsh
 carapace        carapace        _carapace fish | _carapace bash | _carapace zsh
 '
 
+# Setup that only works on top of another program's: "attr  needs attr".
+# Without the second one on the list, the first one's setup is left out
+# (it would print an error in every new shell), and sync says why.
+HOOK_NEEDS='
+mcfly-fzf       mcfly
+'
+
 # --- Looks -------------------------------------------------------------------
 
 if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
@@ -295,16 +302,43 @@ profile_element_path() {
 trim() { local s="$1"; s="${s#"${s%%[![:space:]]*}"}"; printf '%s' "${s%"${s##*[![:space:]]}"}"; }
 
 # "attr<TAB>command<TAB>fish args<TAB>bash args<TAB>zsh args" for each package
-# on the list that needs shell setup, in HOOKS order.
+# on the list that needs shell setup, in HOOKS order. Left out: setup whose
+# program needs another one that isn't on the list (see unmet_hooks).
 active_hooks() {
-  local on attr bin rest f b z
+  local on unmet attr bin rest f b z
   on=$(attrs | sort -u)
+  unmet=$(unmet_hooks | cut -f1)
   while read -r attr bin rest; do
     [[ -n "$attr" ]] || continue
     grep -qxF -- "$attr" <<<"$on" || continue
+    grep -qxF -- "$attr" <<<"$unmet" && continue
     IFS='|' read -r f b z <<<"$rest"
     printf '%s\t%s\t%s\t%s\t%s\n' "$attr" "$bin" "$(trim "$f")" "$(trim "$b")" "$(trim "$z")"
   done <<<"$HOOKS"
+}
+
+# "attr<TAB>what it needs" for each package on the list whose shell setup
+# needs another package (HOOK_NEEDS) that isn't on the list.
+unmet_hooks() {
+  local on attr need
+  on=$(attrs | sort -u)
+  while read -r attr need; do
+    [[ -n "$attr" ]] || continue
+    grep -qxF -- "$attr" <<<"$on" || continue
+    grep -qxF -- "$need" <<<"$on" && continue
+    printf '%s\t%s\n' "$attr" "$need"
+  done <<<"$HOOK_NEEDS"
+}
+
+# Says, for each package whose setup is left out, what to do about it.
+warn_unmet_hooks() {
+  local attr need
+  while IFS=$'\t' read -r attr need; do
+    [[ -n "$attr" ]] || continue
+    printf '%s%s only works with %s, which isn'\''t on the list, so its shell setup is off.%s\n' \
+      "$WARN" "$attr" "$need" "$R"
+    say "  To fix it: ${B}nti add $need${R}, or ${B}nti drop $attr${R} if you're done with it."
+  done < <(unmet_hooks)
 }
 
 # Writes stdin to the file, unless the file already says exactly that.
@@ -373,6 +407,7 @@ write_hooks() {
   added=$(comm -13 <(printf '%s\n' "$before" | grep .) <(printf '%s\n' "$now" | grep .) || true)
   removed=$(comm -23 <(printf '%s\n' "$before" | grep .) <(printf '%s\n' "$now" | grep .) || true)
   [[ -n "$removed" ]] && ok "Shell setup removed: $(paste -sd' ' <<<"$removed" | sed 's/ /, /g')"
+  warn_unmet_hooks
   [[ -z "$added" ]] && return 0
   ok "Shell setup added: $(paste -sd' ' <<<"$added" | sed 's/ /, /g'). Open a new terminal to use it."
   # Bash and zsh need a line in their rc file, once. Said for the shells
@@ -399,6 +434,7 @@ cmd_hooks() {
     say "Shell setup for programs on the list (in this order):"
     awk -F'\t' '{ printf "  %s\t%s %s\n", $1, $2, $3 }' <<<"$rows" | column -t -s $'\t'
   fi
+  warn_unmet_hooks
   if out_of_sync; then
     printf '%sThe list changed since the last sync; nti sync updates this.%s\n' "$WARN" "$R"
   fi
