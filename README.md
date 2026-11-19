@@ -442,6 +442,7 @@ nti adopt PKG...     keep PKG for good: prints the line for your config
 nti edit             open the list in $VISUAL/$EDITOR, then sync
 nti sync             make what's installed match the list
 nti clean            delete what dropped packages left in /nix/store
+nti hooks            the shell setup nti does for programs on the list
 ```
 
 **The list** is `~/.config/nti/packages.nix`, one package per line, the same way you'd list
@@ -473,6 +474,28 @@ now, and so does NixOS's automatic cleanup if you have it on).
 nixpkgs, so they update after you update your system and sync. Elsewhere, `nixpkgs` means
 the latest nixpkgs-unstable, so every sync picks up new versions (Nix checks for one at most
 once an hour).
+
+**Shell setup:** some programs only work once your shell runs their setup line: mcfly,
+atuin and television (Ctrl+R history search), zoxide, starship, direnv, fzf, mise, broot,
+navi, fnm, nix-your-shell, pay-respects, carapace. On every sync, nti writes those lines for
+whatever is on the list, and takes them out again when you drop the program.
+
+- **fish:** `~/.config/fish/conf.d/nti.fish`, which fish loads by itself. Open a new terminal.
+- **bash and zsh:** `~/.config/nti/hooks.bash` and `hooks.zsh`. These need one line in
+  `~/.bashrc` or `~/.zshrc` (or in your config, if Home Manager writes those files). nti
+  prints it the first time, and `nti hooks` shows it again:
+  `[ -f ~/.config/nti/hooks.bash ] && . ~/.config/nti/hooks.bash`
+
+If a program needs setup nti doesn't know about, put its line in your shell config yourself.
+
+**What an install can't do:** some programs ship parts that only work once your system
+config sets them up: udev rules (device access), system services, D-Bus system services or
+polkit actions. When a sync installs one of those, nti says so and prints the line to put in
+your NixOS config. On NixOS it also checks whether there's a `programs.<name>` or
+`services.<name>` module, which often covers things nti can't find by looking at the package,
+like permission wrappers or user groups. If a program comes with a background service that
+runs as you (Syncthing, for example), nti prints the two `systemctl --user` commands to
+start it; it doesn't start it for you.
 
 **Unfree packages** need `{ allowUnfree = true; }` in `~/.config/nixpkgs/config.nix`;
 nti says so if you try one.

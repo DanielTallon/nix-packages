@@ -5,7 +5,7 @@
 # daemon and the same user profile you do.
 stdenvNoCC.mkDerivation (finalAttrs: {
   pname = "nti";
-  version = "0.1.0";
+  version = "0.2.0";
 
   src = ./nti.sh;
   dontUnpack = true;

@@ -29,6 +29,40 @@ PROFILE_ARGS=()
 
 NIX=(nix --extra-experimental-features "nix-command flakes")
 
+# Shell setup files nti writes on every sync, for programs on the list that
+# need a line in your shell config to work (see HOOKS below). Fish loads its
+# file by itself; bash and zsh need one line in ~/.bashrc / ~/.zshrc.
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}"
+FISH_HOOKS="$CONFIG_DIR/fish/conf.d/nti.fish"
+BASH_HOOKS="$CONFIG_DIR/nti/hooks.bash"
+ZSH_HOOKS="$CONFIG_DIR/nti/hooks.zsh"
+# Your Nix profile, for the paths printed in hints.
+PROFILE_LINK="${NTI_PROFILE:-$HOME/.nix-profile}"
+
+# Programs that need shell setup, and the command that prints it. One per
+# line: nixpkgs attr, the command, then its arguments for fish | bash | zsh
+# (a "-" means that shell has none). The output is sourced in each new
+# interactive shell.
+# Order matters: fzf, mcfly, atuin and television all take over Ctrl+R and
+# the last one loaded wins, so fzf comes first and the history tools after.
+HOOKS='
+fzf             fzf             --fish | --bash | --zsh
+mcfly           mcfly           init fish | init bash | init zsh
+mcfly-fzf       mcfly-fzf       init fish | init bash | init zsh
+atuin           atuin           init fish | init bash | init zsh
+television      tv              init fish | init bash | init zsh
+zoxide          zoxide          init fish | init bash | init zsh
+starship        starship        init fish | init bash | init zsh
+direnv          direnv          hook fish | hook bash | hook zsh
+mise            mise            activate fish | activate bash | activate zsh
+broot           broot           --print-shell-function fish | --print-shell-function bash | --print-shell-function zsh
+navi            navi            widget fish | widget bash | widget zsh
+fnm             fnm             env --use-on-cd --shell fish | env --use-on-cd --shell bash | env --use-on-cd --shell zsh
+nix-your-shell  nix-your-shell  fish | bash | zsh
+pay-respects    pay-respects    fish | bash | zsh
+carapace        carapace        _carapace fish | _carapace bash | _carapace zsh
+'
+
 # --- Looks -------------------------------------------------------------------
 
 if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
@@ -69,6 +103,7 @@ ${B}nti${R} $VERSION: Nix Temporary Install. Try programs without a rebuild.
   ${B}nti edit${R}             open the list in \$VISUAL/\$EDITOR, then sync
   ${B}nti sync${R}             make what's installed match the list
   ${B}nti clean${R}            delete what dropped packages left in /nix/store
+  ${B}nti hooks${R}            the shell setup nti does for programs on the list
   ${B}nti path${R}             print where the list is
 
 PKG is a nixpkgs attribute name, as in packages.nix: ripgrep, kdePackages.kate.
@@ -77,6 +112,13 @@ The list: $FILE
   One package per line, editable by hand; run ${B}nti sync${R} after.
   NTI_FILE sets another file, NTI_NIXPKGS another nixpkgs flake (default: nixpkgs),
   NTI_PROFILE another Nix profile (default: your user profile).
+
+Shell setup: some programs (mcfly, zoxide, starship, direnv...) only work once
+your shell runs their setup. nti writes that for whatever is on the list:
+  fish  ${FISH_HOOKS/#$HOME/\~} (loaded by itself)
+  bash  ${BASH_HOOKS/#$HOME/\~}
+  zsh   ${ZSH_HOOKS/#$HOME/\~}
+  (bash and zsh need one line in ~/.bashrc / ~/.zshrc: ${B}nti hooks${R} shows it)
 EOF
 }
 
@@ -248,12 +290,223 @@ profile_element_path() {
     else (map(select(.name? == $n)) | .[0].storePaths[0] // empty) end'
 }
 
+# --- Shell setup -------------------------------------------------------------
+
+trim() { local s="$1"; s="${s#"${s%%[![:space:]]*}"}"; printf '%s' "${s%"${s##*[![:space:]]}"}"; }
+
+# "attr<TAB>command<TAB>fish args<TAB>bash args<TAB>zsh args" for each package
+# on the list that needs shell setup, in HOOKS order.
+active_hooks() {
+  local on attr bin rest f b z
+  on=$(attrs | sort -u)
+  while read -r attr bin rest; do
+    [[ -n "$attr" ]] || continue
+    grep -qxF -- "$attr" <<<"$on" || continue
+    IFS='|' read -r f b z <<<"$rest"
+    printf '%s\t%s\t%s\t%s\t%s\n' "$attr" "$bin" "$(trim "$f")" "$(trim "$b")" "$(trim "$z")"
+  done <<<"$HOOKS"
+}
+
+# Writes stdin to the file, unless the file already says exactly that.
+write_if_changed() {
+  local file="$1" new
+  new=$(cat)
+  [[ -e "$file" && "$(cat "$file")" == "$new" ]] && return 0
+  mkdir -p "$(dirname "$file")"
+  printf '%s\n' "$new" >"$file"
+}
+
+hooks_header() {
+  printf '%s\n' \
+    "# Written by nti (Nix Temporary Install) on every sync: setup for the" \
+    "# programs on its list that need it. nti rewrites this file, so change" \
+    "# the list instead; 'nti hooks' shows what's here."
+}
+
+# Each line: "shell<TAB>its rc file<TAB>nti's file for it", for bash and zsh
+# if installed. Fish needs no line: it loads conf.d by itself.
+shell_rcs() {
+  command -v bash >/dev/null && printf 'bash\t%s\t%s\n' "$HOME/.bashrc" "$BASH_HOOKS"
+  command -v zsh >/dev/null && printf 'zsh\t%s\t%s\n' "${ZDOTDIR:-$HOME}/.zshrc" "$ZSH_HOOKS"
+  return 0
+}
+
+# The line that loads nti's file ($1) from a bash or zsh rc file.
+rc_line() { local f="${1/#$HOME/\~}"; printf '[ -f %s ] && . %s' "$f" "$f"; }
+
+rc_loads() { [[ -e "$1" ]] && grep -qF "nti/hooks." "$1"; }
+
+# Rewrites the shell setup files to match the list, and says what changed.
+write_hooks() {
+  local rows before now added removed sh rc file told
+  rows=$(active_hooks)
+  if [[ -z "$rows" ]]; then
+    rm -f "$FISH_HOOKS" "$BASH_HOOKS" "$ZSH_HOOKS"
+  else
+    # Written for each shell that's installed, and always kept current once
+    # it exists, so a sync without that shell on PATH can't leave it stale.
+    if command -v fish >/dev/null || [[ -d "$CONFIG_DIR/fish" || -e "$FISH_HOOKS" ]]; then
+      {
+        hooks_header
+        printf 'if status is-interactive\n'
+        awk -F'\t' '$3 != "-" { printf "    type -q %s; and %s %s | source\n", $2, $2, $3 }' <<<"$rows"
+        printf 'end\n'
+      } | write_if_changed "$FISH_HOOKS"
+    fi
+    {
+      hooks_header
+      printf '[[ $- == *i* ]] || return 0\n'
+      awk -F'\t' '$4 != "-" { printf "command -v %s >/dev/null && eval \"$(%s %s)\"\n", $2, $2, $4 }' <<<"$rows"
+    } | write_if_changed "$BASH_HOOKS"
+    if command -v zsh >/dev/null || [[ -e "$ZSH_HOOKS" ]]; then
+      {
+        hooks_header
+        printf '[[ -o interactive ]] || return 0\n'
+        awk -F'\t' '$5 != "-" { printf "(( $+commands[%s] )) && eval \"$(%s %s)\"\n", $2, $2, $5 }' <<<"$rows"
+      } | write_if_changed "$ZSH_HOOKS"
+    fi
+  fi
+
+  before=$(grep . "$STATE_DIR/hooked" 2>/dev/null | sort || true)
+  now=$(cut -f1 <<<"$rows" | grep . | sort || true)
+  printf '%s\n' "$now" >"$STATE_DIR/hooked"
+  added=$(comm -13 <(printf '%s\n' "$before" | grep .) <(printf '%s\n' "$now" | grep .) || true)
+  removed=$(comm -23 <(printf '%s\n' "$before" | grep .) <(printf '%s\n' "$now" | grep .) || true)
+  [[ -n "$removed" ]] && ok "Shell setup removed: $(paste -sd' ' <<<"$removed" | sed 's/ /, /g')"
+  [[ -z "$added" ]] && return 0
+  ok "Shell setup added: $(paste -sd' ' <<<"$added" | sed 's/ /, /g'). Open a new terminal to use it."
+  # Bash and zsh need a line in their rc file, once. Said for the shells
+  # you use (your login shell, or one with an rc file) that lack it.
+  while IFS=$'\t' read -r sh rc file; do
+    told="$STATE_DIR/told-$sh"
+    rc_loads "$rc" && continue
+    [[ -e "$told" ]] && continue
+    [[ -e "$rc" || "$(basename "${SHELL:-}")" == "$sh" ]] || continue
+    note "For $sh, add this line to ${rc/#$HOME/\~} (or to your config, if Home Manager writes that file):"
+    say "  $(rc_line "$file")"
+    : >"$told"
+  done < <(shell_rcs)
+  return 0
+}
+
+cmd_hooks() {
+  ensure_file
+  local rows sh rc file
+  rows=$(active_hooks)
+  if [[ -z "$rows" ]]; then
+    say "Nothing on the list needs shell setup."
+  else
+    say "Shell setup for programs on the list (in this order):"
+    awk -F'\t' '{ printf "  %s\t%s %s\n", $1, $2, $3 }' <<<"$rows" | column -t -s $'\t'
+  fi
+  if out_of_sync; then
+    printf '%sThe list changed since the last sync; nti sync updates this.%s\n' "$WARN" "$R"
+  fi
+  say
+  say "fish  ${FISH_HOOKS/#$HOME/\~} (loads by itself)"
+  while IFS=$'\t' read -r sh rc file; do
+    if rc_loads "$rc"; then
+      say "$sh  ${file/#$HOME/\~} (loaded from ${rc/#$HOME/\~})"
+    else
+      say "$sh  ${file/#$HOME/\~}: not loaded yet. Add this to ${rc/#$HOME/\~}:"
+      say "      $(rc_line "$file")"
+    fi
+  done < <(shell_rcs)
+  say
+  say "${D}nti knows the setup for: $(awk 'NF { print $1 }' <<<"$HOOKS" | paste -sd' ' | sed 's/ /, /g').${R}"
+  say "${D}For anything else, put its setup line in your shell config yourself.${R}"
+}
+
+# --- Things an install can't set up ------------------------------------------
+
+# What a package ships that only works once your system config sets it up:
+# "what<TAB>NixOS config line" per kind found. $1 = attr, $2 = store path.
+system_parts() {
+  local a="$1" o="$2"
+  [[ -d "$o" ]] || return 0
+  if compgen -G "$o/lib/udev/rules.d/*" >/dev/null || compgen -G "$o/etc/udev/rules.d/*" >/dev/null; then
+    printf 'udev rules (device access)\tservices.udev.packages = [ pkgs.%s ];\n' "$a"
+  fi
+  if compgen -G "$o/lib/systemd/system/*" >/dev/null || compgen -G "$o/etc/systemd/system/*" >/dev/null; then
+    printf 'system services\tsystemd.packages = [ pkgs.%s ];\n' "$a"
+  fi
+  if compgen -G "$o/share/dbus-1/system-services/*" >/dev/null || compgen -G "$o/share/dbus-1/system.d/*" >/dev/null ||
+    compgen -G "$o/etc/dbus-1/system.d/*" >/dev/null; then
+    printf 'D-Bus system services\tservices.dbus.packages = [ pkgs.%s ];\n' "$a"
+  fi
+  if compgen -G "$o/share/polkit-1/actions/*" >/dev/null; then
+    printf 'polkit actions (admin prompts)\tenvironment.systemPackages = [ pkgs.%s ];\n' "$a"
+  fi
+  return 0
+}
+
+# "attr<TAB>config line" for each attr given that NixOS has a programs.* or
+# services.* module for (on NixOS only). Such a module often sets up what a
+# plain install can't: permissions, wrappers, services, groups.
+nixos_modules() {
+  [[ -e /etc/NIXOS && $# -gt 0 ]] || return 0
+  NTI_ATTRS="$(printf '%s\n' "$@")" nix_eval --raw --expr "$PRELUDE"'
+    let
+      o = (import "${pkgs.path}/nixos/lib/eval-config.nix" { system = builtins.currentSystem; modules = [ ]; }).options;
+      names = builtins.filter (s: s != "") (lib.splitString "\n" (builtins.getEnv "NTI_ATTRS"));
+      has = set: n: set ? ${n} && set.${n} ? enable;
+      line = a:
+        let n = lib.last (lib.splitString "." a); in
+        if has o.programs n then "programs.${n}.enable = true;"
+        else if has o.services n then "services.${n}.enable = true;"
+        else "";
+    in lib.concatMapStrings (a: let l = line a; in lib.optionalString (l != "") "${a}\t${l}\n") names' 2>/dev/null || true
+}
+
+# After a sync installs something new: what it needs that nti can't do.
+# $1 = the new attrs, one per line; $2 = info_json for them.
+report_extras() {
+  local new="$1" info="$2" mods a o parts mod units u
+  # shellcheck disable=SC2046
+  mods=$(nixos_modules $(printf '%s\n' "$new"))
+  while read -r a; do
+    [[ -n "$a" ]] || continue
+    o=$(jq -r --arg a "$a" '.[$a].out // ""' <<<"$info")
+    parts=$(system_parts "$a" "$o")
+    mod=$(awk -F'\t' -v a="$a" '$1 == a { print $2 }' <<<"$mods")
+    if [[ -n "$parts" ]]; then
+      printf '\n%s%s may not fully work from nti:%s it comes with %s,\n' "$WARN" "$a" "$R" \
+        "$(cut -f1 <<<"$parts" | paste -sd'|' | sed 's/|/, /g')"
+      say "which only your system config can set up. To use all of it, put this in your"
+      say "NixOS config and rebuild (then nti drop $a):"
+      if [[ -n "$mod" ]]; then
+        say "  $B$mod$R"
+      else
+        cut -f2 <<<"$parts" | sed "s/^/  /"
+      fi
+    elif [[ -n "$mod" ]] && ! awk -v a="$a" '$1 == a { f = 1 } END { exit !f }' <<<"$HOOKS"; then
+      # (For programs in HOOKS, the module is mostly the shell setup nti does.)
+      printf '\n'
+      note "NixOS also has a module for $a: $mod"
+      say "${D}Some programs need theirs for permissions or services. If $a doesn't fully"
+      say "work from nti, use that line in your config instead (then nti drop $a).${R}"
+    fi
+    units=()
+    for u in "$o"/lib/systemd/user/*.service; do
+      [[ -e "$u" ]] && units+=("$(basename "$u")")
+    done
+    if [[ ${#units[@]} -gt 0 ]]; then
+      printf '\n'
+      note "$a comes with a background service you can run: ${units[*]}"
+      say "  systemctl --user link ${PROFILE_LINK/#$HOME/\~}/lib/systemd/user/${units[0]}"
+      say "  systemctl --user enable --now ${units[0]}"
+      say "${D}nti doesn't start it for you. Disable it before you drop $a.${R}"
+    fi
+  done <<<"$new"
+  return 0
+}
+
 # --- Commands ----------------------------------------------------------------
 
 cmd_sync() {
   ensure_file
   mkdir -p "$STATE_DIR"
-  local before after new gone current out changed=0 old_versions new_versions updated=""
+  local before after new gone current out changed=0 old_versions new_versions updated="" info_all=""
   before=$(cat "$SYNCED" 2>/dev/null || true)
   old_versions=$(cat "$VERSIONS" 2>/dev/null || true)
   new_versions=""
@@ -284,7 +537,8 @@ cmd_sync() {
     current=$(profile_element_path)
     # Versions now, to say what a sync updated (same nixpkgs as the build).
     # shellcheck disable=SC2046
-    new_versions=$(info_json $(printf '%s\n' "$after") | jq -r 'to_entries[] | "\(.key)\t\(.value.version)"' || true)
+    info_all=$(info_json $(printf '%s\n' "$after") || true)
+    new_versions=$(jq -r 'to_entries[] | "\(.key)\t\(.value.version)"' <<<"$info_all" 2>/dev/null || true)
     if [[ "$current" != "$out" ]]; then
       changed=1
       # Built first, so the swap is two quick steps that can't fail halfway
@@ -316,6 +570,10 @@ cmd_sync() {
     else
       ok "Up to date: $(wc -l < <(printf '%s\n' "$after" | grep .)) package(s) on the list."
     fi
+  fi
+  write_hooks
+  if [[ -n "$new" && -n "$info_all" ]]; then
+    report_extras "$new" "$info_all" || true
   fi
   return 0
 }
@@ -600,6 +858,7 @@ case "${1:-}" in
   edit)          shift; cmd_edit ;;
   sync)          shift; cmd_sync ;;
   clean|gc)      shift; cmd_clean ;;
+  hooks|setup)   shift; cmd_hooks ;;
   path)          say "$FILE" ;;
   help|-h|--help) usage ;;
   --version)     say "nti $VERSION" ;;
