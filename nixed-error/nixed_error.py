@@ -189,9 +189,10 @@ class Flake:
                     ]
         return self._files
 
-    def find(self, needles: list[str], prefer: list[Path] = (), regex: bool = False) -> Loc | None:
-        """First line in your config containing one of the needles (tried in order)."""
-        files = list(dict.fromkeys([*prefer, *self.files()]))
+    def find(self, needles: list[str], prefer: list[Path] = (), regex: bool = False,
+             only: list[Path] | None = None) -> Loc | None:
+        """First line in your config containing one of the needles (tried in order), in `only` if given."""
+        files = list(dict.fromkeys([*prefer, *self.files()])) if only is None else only
         for needle in needles:
             if not needle:
                 continue
@@ -1089,14 +1090,15 @@ def h_removed_pkg(rep: Report, vars: dict, flake: Flake, rules, text: str) -> No
     vars["fix_text"] = fix
 
 
-def pkg_use(flake: Flake, pname: str) -> tuple[Loc | None, str]:
-    """Where your files pull a package in, and the package set it comes from (pkgs, pkgs-stable, ...)."""
+def pkg_use(flake: Flake, pname: str, only: list[Path] | None = None) -> tuple[Loc | None, str]:
+    """Where your files pull a package in, and the package set it comes from (pkgs, pkgs-stable, ...).
+    `only` limits the search to those files."""
     head = re.escape(pname.split("-")[0])
     set_re = rf"\b(?P<set>[\w-]*pkgs[\w-]*)\.{re.escape(pname)}(?![\w-])"  # pkgs.foo, pkgs-stable.foo, ...
     # Drivers and modules pull packages in without naming them: nvidia-x11 comes from videoDrivers / hardware.nvidia.
     use = flake.find([set_re, rf"videoDrivers\s*=.*\"{head}\"",
                       rf"\b(?:hardware|programs|services)\.{head}(?![\w-])", rf"(?<![\w.\"-]){re.escape(pname)}(?![\w-])"],
-                     regex=True)
+                     regex=True, only=only)
     pset = m["set"] if use and (m := re.search(set_re, read_lines(use.origin.real)[use.line - 1])) else "pkgs"
     return use, pset
 
@@ -1520,6 +1522,57 @@ def made_by_module(flake: Flake, name: str) -> Loc | None:
     return None
 
 
+def installed_by(flake: Flake, name: str) -> list[Origin] | None:
+    """The files whose package lists (environment.systemPackages, users.users.<name>.packages, home-manager's
+    home.packages) hold the derivation called `name`, asked of the config itself. A plain text search can't tell
+    which host a file belongs to: a `discord` in another machine's file isn't what this one installs. None if Nix
+    couldn't say (older nixpkgs without `valueMeta` still answers for environment.systemPackages)."""
+    cfg = flake.config
+    if not cfg or not cfg.kind:
+        return None
+    pick = f"""c: let
+      o = c.options;
+      has = p: let r = builtins.tryEval (p.name or ""); in r.success && r.value == {json.dumps(name)};
+      pick = opt: map (d: d.file)
+        (builtins.filter (d: builtins.isList d.value && builtins.any has d.value) (opt.definitionsWithLocations or [ ]));
+      each = opt: f: builtins.concatLists (map f (builtins.attrValues (opt.valueMeta.attrs or {{ }})));
+    in pick (o.environment.systemPackages or {{ }})
+      ++ each (o.users.users or {{ }}) (u: pick (u.configuration.options.packages or {{ }}))
+      ++ each (o.home-manager.users or {{ }}) (u: pick (u.configuration.options.home.packages or {{ }}))"""
+    if cfg.kind == "flake":
+        cmd = ["nix", "--extra-experimental-features", "nix-command flakes", "eval", "--json",
+               f'{cfg.ref}#nixosConfigurations."{cfg.host}"', "--apply", pick]
+    else:
+        cmd = ["nix-instantiate", "--eval", "--strict", "--json", "-E",
+               f"({pick}) (import <nixpkgs/nixos> {{ configuration = /. + {json.dumps(cfg.ref)}; }})"]
+    try:
+        p = run_with_timer(cmd, "Looking up what installs it")
+        files = json.loads(p.stdout) if p.returncode == 0 else None
+    except (OSError, ValueError):
+        return None
+    if not isinstance(files, list):
+        return None
+    out = []
+    for f in dict.fromkeys(f.split(", via option ")[0] for f in files if isinstance(f, str)):
+        o = flake.origin(f)
+        if o.real and o.real.is_dir():  # a module given as its folder
+            o = flake.origin(str(o.real / "default.nix")) if (o.real / "default.nix").is_file() else o
+        out.append(o)
+    return out
+
+
+def input_tracker(flake: Flake, label: str) -> str | None:
+    """The issue tracker of a top-level GitHub flake input, from flake.lock."""
+    try:
+        lock = json.loads((flake.dir / "flake.lock").read_text()) if flake.dir else {}
+        nodes = lock["nodes"]
+        key = nodes[lock.get("root", "root")]["inputs"][label]
+        locked = nodes[key]["locked"] if isinstance(key, str) else {}
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return f"github.com/{locked['owner']}/{locked['repo']}/issues" if locked.get("type") == "github" else None
+
+
 def trace_build(flake: Flake, text: str, drv: str) -> tuple[str, Loc | None, str, str, str]:
     """What needs a failed build: a note with the chain, the line in your files to act on, what that line
     is ("package", "option" or "") with its name, and the input whose module made the failed one."""
@@ -1537,10 +1590,35 @@ def trace_build(flake: Flake, text: str, drv: str) -> tuple[str, Loc | None, str
     pkgs_ = [n for n in reversed(outer) if n not in COLLECTORS and VERSION_RE.search(n)
              and not n.startswith("nixos-system-")]
     for i, n in enumerate(pkgs_):
-        if use := pkg_use(flake, drv_attr(n).split(".")[-1])[0]:
-            via = [drv_attr(x) for x in pkgs_[i + 1:]] + [VERSION_RE.sub("", failed)]
-            return (note + f" `{drv_attr(n)}` ({use.describe()}) needs " + ", which needs ".join(f"`{v}`" for v in via)
-                    + "."), use, "package", drv_attr(n), ""
+        attr = drv_attr(n)
+        via = [drv_attr(x) for x in pkgs_[i + 1:]] + [VERSION_RE.sub("", failed)]
+        needs = " needs " + ", which needs ".join(f"`{v}`" for v in via) + "."
+        found = installed_by(flake, n)
+        if found is None:  # Nix couldn't say: search all your files
+            use = pkg_use(flake, attr.split(".")[-1])[0]
+        else:
+            mine = [o.real for o in found if o.owner == "you" and o.real]
+            use = pkg_use(flake, attr.split(".")[-1], only=mine)[0] if mine else None
+            if mine and not use:
+                use = Loc(flake.origin(str(mine[0])))
+            ups = [o for o in found if o.owner == "upstream"]
+            if not use and ups:
+                # a module from an input installs it (nixcord's discord): find where you turn that module on
+                mod = ups[0]
+                src = "\n".join(read_lines(mod.real))
+                opt = module_switch(src)
+                opt = opt.removesuffix(".enable") if opt else None
+                # where you set it (`programs.nixcord = {`, `.enable = true`), not where you read it (`config.…`)
+                on = flake.find([rf"(?<![\w.]){re.escape(opt)}(?:\.enable)?\s*=", rf"(?<!config\.){re.escape(opt)}\b"],
+                                regex=True) if opt else None
+                note += f" `{attr}` is installed by {mod.label}'s {mod.display.split(': ', 1)[-1]}"
+                if on:
+                    return (note + f", for `{opt}`, which you set on {on.describe()}. It{needs}", on, "option",
+                            opt, mod.label)
+                return note + (f", for `{opt}`" if opt else "") + f". It{needs}", None, \
+                    "option" if opt else "", opt or "", mod.label
+        if use:
+            return (note + f" `{attr}` ({use.describe()})" + needs), use, "package", attr, ""
     # else a module made it: find the module, and where you turn that module on
     for n in [failed, *outer]:
         if n in COLLECTORS or n.startswith("nixos-system-"):
@@ -1624,8 +1702,8 @@ def h_build(rep: Report, vars: dict, flake: Flake, rules: list[Rule], text: str)
         else:
             remove = "remove the package"
         rep.loc = at
-        tracker = {"home-manager": "github.com/nix-community/home-manager/issues"}.get(
-            made_in, "github.com/NixOS/nixpkgs/issues")
+        tracker = {"home-manager": "github.com/nix-community/home-manager/issues"}.get(made_in) or (
+            made_in and input_tracker(flake, made_in)) or "github.com/NixOS/nixpkgs/issues"
         vars["advice"] = (f"Check whether it's already reported ({tracker}, search "
                           f"\"{pname}\"). Meanwhile, go back to your previous flake.lock "
                           f"(`git checkout flake.lock`) or {remove} for now.")

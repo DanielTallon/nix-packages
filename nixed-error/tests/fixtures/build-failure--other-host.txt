@@ -1,0 +1,20 @@
+unpacking 'https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.zst' into the Git cache...
+warning: creating lock file "/home/fredrick/Develop/nix-packages/nixed-error/tests/.work/build-failure--other-host/flake.lock": 
+• Added input 'nixpkgs':
+    'https://releases.nixos.org/nixpkgs/nixpkgs-26.11pre1124565.19cfded70b91/nixexprs.tar.zst?narHash=sha256-iE8oRwNZcE7Mcupd5cNTCWMi4e07CoQIRYUmw5tf%2B9w%3D' (2026-11-19)
+these 2 derivations will be built:
+  /nix/store/ljfb5r8l6c8rr1g12ri7g0aaxkkzfd54-dep-tool-1.0.drv
+  /nix/store/cc6hragnk6q6r7gda20f04dnp7cf7x83-my-tools-1.0.drv
+building '/nix/store/ljfb5r8l6c8rr1g12ri7g0aaxkkzfd54-dep-tool-1.0.drv'...
+error: Cannot build '/nix/store/ljfb5r8l6c8rr1g12ri7g0aaxkkzfd54-dep-tool-1.0.drv'.
+       Reason: builder failed with exit code 1.
+       Output paths:
+         /nix/store/4dqr2wi6w0ahvg58ygkhfmhz1f33bz02-dep-tool-1.0
+       Last 1 log lines:
+       > dep.c:3: error: expected ';'
+       For full logs, run:
+         nix log /nix/store/ljfb5r8l6c8rr1g12ri7g0aaxkkzfd54-dep-tool-1.0.drv
+error: Cannot build '/nix/store/cc6hragnk6q6r7gda20f04dnp7cf7x83-my-tools-1.0.drv'.
+       Reason: 1 dependency failed.
+       Output paths:
+         /nix/store/fg098ib9daif874bzzm59gwl0a42klx4-my-tools-1.0

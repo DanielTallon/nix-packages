@@ -5,6 +5,27 @@ set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 py=python3; command -v python3 >/dev/null || py="nix shell nixpkgs#python3 -c python3"
 pass=0 fail=0
+
+# Captured fixtures name the nixpkgs source they were made with (/nix/store/…-source), and some reports quote it
+# (broken--dependency's `broken = …` line). Garbage collection removes it, so fetch it back (same narHash, same
+# path) and keep it with a GC root in .work/.
+for f in $(grep -l '^# mode: captured' "$here"/cases/*.nix); do
+  fx=$here/fixtures/$(basename "$f" .nix).txt
+  [ -f "$fx" ] || continue
+  for rev in $(grep -o 'github:NixOS/nixpkgs/[0-9a-f]\{40\}' "$fx" | sort -u); do
+    root=$here/.work/gcroots/${rev##*/}
+    [ -e "$root" ] && continue
+    path=$(nix --extra-experimental-features 'nix-command flakes' flake prefetch --json "$rev" 2>/dev/null \
+      | sed -n 's/.*"storePath":"\([^"]*\)".*/\1/p')
+    if [ -n "$path" ]; then
+      mkdir -p "${root%/*}"
+      nix-store --add-root "$root" --realise "$path" >/dev/null
+    else
+      echo "note: couldn't fetch $rev for $(basename "$fx") (offline?); its report may lack nixpkgs quotes"
+    fi
+  done
+done
+
 for f in "$here"/fixtures/*.txt; do
   name=$(basename "$f" .txt)
   case=$here/cases/$name.nix
@@ -14,7 +35,7 @@ for f in "$here"/fixtures/*.txt; do
   ok=1
   if [ "$got" != "$expect" ]; then ok=0; echo "FAIL $name: expected $expect, got $got"; fi
   if grep -q '^# expect-output: ' "$case" 2>/dev/null; then
-    report=$(NO_COLOR=1 $py "$here/../nixed_error.py" --flake "$here/.work/$name" "$f" | tr -s ' \n' ' ')
+    report=$(NO_COLOR=1 $py "$here/../nixed_error.py" --flake "$here/.work/$name" --host testhost "$f" | tr -s ' \n' ' ')
     while IFS= read -r want; do
       [[ $report == *"$want"* ]] || { ok=0; echo "FAIL $name: report lacks: $want"; }
     done < <(sed -n 's/^# expect-output: //p' "$case")
