@@ -1,7 +1,7 @@
 {
-  "version": "11.0-20261119",
+  "version": "11.0-20261124",
   "hashes": {
-    "x86_64_v3": "sha256-S2TQATsTMY9W5/Gmhgr9SAPTXrtOHmDpnf/ZpNSW/4I=",
-    "x86_64": "sha256-Mt1wrZR8K6SvZulk3Axw9SPRiCCbiDYvEweCI5fDkPw="
+    "x86_64_v3": "sha256-N/FA5fy0Bpt+DYpcUzK2hYK7FlyrbDqxEtWuFqOJMM4=",
+    "x86_64": "sha256-NnHowCPZCd32++LyBNuQJuw/82+AQQAyurNt4bl3t9o="
   }
 }
