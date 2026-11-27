@@ -26,6 +26,19 @@ for f in $(grep -l '^# mode: captured' "$here"/cases/*.nix); do
   done
 done
 
+# Build-mode fixtures name .drv files that reports look up (`nix why-depends`). make-fixtures.sh GC-roots them;
+# put back a root that's missing (made before roots existed) or whose .drv was collected anyway.
+# Re-instantiating the same .work flake (same flake.lock) gives the same .drv path.
+for f in $(grep -l '^# mode: build' "$here"/cases/*.nix); do
+  name=$(basename "$f" .nix) root=$here/.work/gcroots/$name.drv
+  [ -d "$here/.work/$name" ] || continue
+  [ -e "$root" ] && continue  # -e follows the link: false if it's gone or points at a deleted .drv
+  mkdir -p "${root%/*}"
+  nix-instantiate --add-root "$root" --expr \
+    "(builtins.getFlake \"path:$here/.work/$name\").nixosConfigurations.testhost.config.system.build.nixedErrorCase" \
+    >/dev/null 2>&1 || echo "note: couldn't GC-root $name's .drv (rerun make-fixtures.sh $name)"
+done
+
 for f in "$here"/fixtures/*.txt; do
   name=$(basename "$f" .txt)
   case=$here/cases/$name.nix

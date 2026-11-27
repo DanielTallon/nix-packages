@@ -1646,9 +1646,11 @@ def h_build(rep: Report, vars: dict, flake: Flake, rules: list[Rule], text: str)
         log = "\n".join(LOG_LINE_RE.findall(text))
     log = clean(log)
     rep.log_tail = [l for l in log.splitlines() if l.strip()][-15:]
+    patch = ""  # a patch from the log that failed to apply
     if log.strip() and (cause := best_match(rules, [Block(log, log, None)], log, "log")):
         c_rule, c_m, _ = cause
         cvars = {k: v for k, v in c_m.groupdict().items() if v is not None} | {"name": name, "pname": pname}
+        patch = cvars.get("patch", "")
         rep.cause = Report(title=c_rule.title, rule_id=c_rule.id, blame=c_rule.blame,
                            explain=render(c_rule.explain, cvars), fix=render(c_rule.fix, cvars))
         if c_rule.blame in ("system", "you"):
@@ -1659,12 +1661,23 @@ def h_build(rep: Report, vars: dict, flake: Flake, rules: list[Rule], text: str)
     # Or a nixpkgs package you changed (`pkgs.foo.overrideAttrs`, an overlay's `prev.foo.override`)?
     changed = None if own else flake.find(
         [rf"\b{re.escape(pname)}\.(?:overrideAttrs|overrideDerivation|override)\b"], regex=True)
+    # Or a patch of yours that no longer applies? The override needn't name the package
+    # (`inputs.x.packages.${system}.default.overrideAttrs`), but it names the patch file.
+    mine_patch = None if own or not patch else flake.find(
+        [rf"(?<![\w.-]){re.escape(patch)}(?![\w.-])"], regex=True)
     if own:
         rep.loc = own
         if rep.blame == "unknown":
             rep.blame = "you"
         vars["owner_note"] = f"`{pname}` is a package defined in your own config ({own.describe()})."
         vars["advice"] = "The cause is in the end of the build log above: your build script or its source."
+    elif mine_patch:
+        rep.loc = mine_patch
+        rep.blame = "you"
+        vars["owner_note"] = (f"The failing patch, `{patch}`, is yours: you add it to `{pname}` on "
+                              f"{mine_patch.describe()}. Your patch needs updating, not the package.")
+        vars["advice"] = ("Until it's updated, go back to your previous flake.lock (`git checkout flake.lock`), "
+                          f"or take the patch out of line {mine_patch.line} for now.")
     elif changed:
         rep.loc = changed
         if rep.blame in ("unknown", "upstream"):

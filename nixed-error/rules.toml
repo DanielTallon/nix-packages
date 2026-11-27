@@ -577,6 +577,38 @@ fix = "Remove one of them, or give one priority: `(lib.hiPrio pkgs.<name>)` in y
 
 # ─── causes found inside build logs ──────────────────────────────────────────
 
+# Above log-tests-failed: `Hunk #4 FAILED` would otherwise read as "4 failed" tests.
+# The build handler checks whether {{patch}} is named in your files (your own patch).
+[[rule]]
+id = "log-patch-failed"
+title = "A patch no longer fits the source"
+match = '''applying patch (?:\S*/)?(?:[a-z0-9]{32}-)?(?P<patch>[^/\s]+)(?:(?!applying patch)[\s\S])*?(?:\d+ out of \d+ hunks? FAILED|Reversed \(or previously applied\) patch detected)'''
+priority = 71
+scope = "log"
+blame = "upstream"
+explain = """
+The patch `{{patch}}` didn't apply: the code it changes isn't where or what it used to be.
+This usually means the package's source was updated (often by your last flake update) and the patch was
+written for the old version. The failed parts are listed above as `Hunk #… FAILED`.
+"""
+fix = """
+Update `{{patch}}` for the new source (redo its change on the new code and make a fresh diff), or drop it if
+the new version already does the same thing.
+"""
+
+[[rule]]
+id = "log-patch-failed--unnamed"
+title = "A patch no longer fits the source"
+match = '''\d+ out of \d+ hunks? FAILED|Reversed \(or previously applied\) patch detected'''
+priority = 70
+scope = "log"
+blame = "upstream"
+explain = """
+A patch didn't apply: the code it changes isn't where or what it used to be. This usually means the
+package's source was updated and the patch was written for the old version.
+"""
+fix = "Update the patch for the new source, or drop it if the new version already does the same thing."
+
 [[rule]]
 id = "log-tests-failed"
 title = "The package's own tests failed"

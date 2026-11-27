@@ -1,0 +1,60 @@
+error: Cannot build '/nix/store/m5p084jy14wya6i50jn3l2bnvhm8wanv-fetch-2.3.0.drv'.
+       Reason: builder failed with exit code 1.
+       Output paths:
+         /nix/store/jjrir8y26xwqxnqsn6n0sq5wspak71kh-fetch-2.3.0
+       Last 12 log lines:
+       > structuredAttrs is enabled
+       > Running phase: unpackPhase
+       > unpacking source archive /nix/store/d1mq97kbm1i827dciag1hpccgla4z2h6-source
+       > source root is source
+       > Running phase: patchPhase
+       > applying patch /nix/store/dpnz260bsbn0pjsx6b57h0zf1n4q2vk8-title.patch
+       > patching file fetch.c
+       > Hunk #1 succeeded at 1006 with fuzz 1 (offset 60 lines).
+       > Hunk #2 succeeded at 1177 (offset 77 lines).
+       > Hunk #3 succeeded at 1502 with fuzz 1 (offset 73 lines).
+       > Hunk #4 FAILED at 4165.
+       > 1 out of 4 hunks FAILED -- saving rejects to file fetch.c.rej
+       For full logs, run:
+         nix log /nix/store/m5p084jy14wya6i50jn3l2bnvhm8wanv-fetch-2.3.0.drv
+error: Cannot build '/nix/store/nc379lwn75xpblskqmmxyx1f3xx88cn0-fetch-2.3.0-fish-completions.drv'.
+       Reason: 1 dependency failed.
+       Output paths:
+         /nix/store/qynib7iw0wpznyavigraq2vz1y54yxr8-fetch-2.3.0-fish-completions
+error: Cannot build '/nix/store/ya5hjy9rmaywcmq2clv6bayhcx5kvq3h-home-manager-path.drv'.
+       Reason: 1 dependency failed.
+       Output paths:
+         /nix/store/dmy7knvx0ajrh5cdisc90rvz6pnmj6y3-home-manager-path
+error: Cannot build '/nix/store/zpf942dz3j9ws4wrqiddb6q3d320056l-man-paths.drv'.
+       Reason: 1 dependency failed.
+       Output paths:
+         /nix/store/wx8qrznaic37pfaaabpp463x8yz9vjwq-man-paths
+error: Cannot build '/nix/store/wzjrnp2i85wh6wi6gq89zg3yag4pjgmg-home-manager-generation.drv'.
+       Reason: 1 dependency failed.
+       Output paths:
+         /nix/store/ijklvjmacvwmlv0r5k63ssmqfzhpwypw-home-manager-generation
+error: Cannot build '/nix/store/hslj7nah5jp4lsg6hd3b15dzzypa5zj5-user-environment.drv'.
+       Reason: 1 dependency failed.
+       Output paths:
+         /nix/store/px3cf5g87vl4p48425bpaqmx3sw7afw9-user-environment
+error: Cannot build '/nix/store/h84k08myp0s9np9izhzd5aw8jcd4fgx2-etc.drv'.
+       Reason: 1 dependency failed.
+       Output paths:
+         /nix/store/ab1n0n28bf5pnvawxgbwdplj9hfbc8sq-etc
+error: Cannot build '/nix/store/wwix4l5qcbnxr52hf9ybvf8v154fkbdd-etc.drv'.
+       Reason: 1 dependency failed.
+       Output paths:
+         /nix/store/a5g92805q30nzp3vkgm5xrbgi7wypb5y-etc
+error: Cannot build '/nix/store/a094q7w11xbzqqi3fps1cn4nw5m86lkc-nixos-system-nixos-26.11.20261121.2786a2a.drv'.
+       Reason: 1 dependency failed.
+       Output paths:
+         /nix/store/8dgwc6s87xnrj3hn8j5lhkiq5xiyi3x7-nixos-system-nixos-26.11.20261121.2786a2a
+┕━ Exited with 9 failed build(s) after 0s
+Error: Command exited with status ExitStatus(Exited(1))
+
+Context:
+  0: Failed to build configuration
+     at crates/nh-nixos/src/nixos.rs:724:6
+
+Location:
+  crates/nh-core/src/command.rs:1114:7

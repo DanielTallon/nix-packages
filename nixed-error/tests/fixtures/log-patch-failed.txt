@@ -1,0 +1,25 @@
+warning: creating lock file "/home/fredrick/Develop/nix-packages/nixed-error/tests/.work/log-patch-failed/flake.lock": 
+• Added input 'nixpkgs':
+    'https://releases.nixos.org/nixpkgs/nixpkgs-26.11pre1126808.619c39f6eac5/nixexprs.tar.zst?narHash=sha256-3Xq%2BXlDu5l%2BUJ0cc%2BJigs84%2Btz7Qu92NgXVHgJwC52M%3D' (2026-11-22)
+these 2 derivations will be built:
+  /nix/store/sdy11a7adlvfcpdcisir802an80rhsnl-title.patch.drv
+  /nix/store/8hdccddl0ls82k90iv1bkd82d30ldgg5-hello-2.12.3.drv
+building '/nix/store/sdy11a7adlvfcpdcisir802an80rhsnl-title.patch.drv'...
+building '/nix/store/8hdccddl0ls82k90iv1bkd82d30ldgg5-hello-2.12.3.drv'...
+error: Cannot build '/nix/store/8hdccddl0ls82k90iv1bkd82d30ldgg5-hello-2.12.3.drv'.
+       Reason: builder failed with exit code 1.
+       Output paths:
+         /nix/store/89kn2sz5whvr8jdbkfay6rxl1jkkd4by-hello-2.12.3
+       Last 10 log lines:
+       > Using versionCheckHook
+       > Running phase: unpackPhase
+       > unpacking source archive /nix/store/wj7phsmi7ncidl8k00p489krqss7n9sd-hello-2.12.3.tar.gz
+       > source root is hello-2.12.3
+       > setting SOURCE_DATE_EPOCH to timestamp 1773804383 of file "hello-2.12.3/ChangeLog"
+       > Running phase: patchPhase
+       > applying patch /nix/store/fl65gwv1lb97n63acwxyaz0wwdqsagmg-title.patch
+       > patching file src/hello.c
+       > Hunk #1 FAILED at 1.
+       > 1 out of 1 hunk FAILED -- saving rejects to file src/hello.c.rej
+       For full logs, run:
+         nix log /nix/store/8hdccddl0ls82k90iv1bkd82d30ldgg5-hello-2.12.3.drv

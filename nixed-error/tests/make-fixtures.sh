@@ -92,8 +92,21 @@ EOF
   else
     echo "ok $name"
   fi
+  grep -q '^# mode: build' "$case" && root_drv "$name"
+  return 0
 }
 export -f one
+
+# A failed build leaves no output to keep its .drv alive, so garbage collection deletes it, and reports
+# that run `nix why-depends` on it (build-failure--chain) lose their chain. Root it in .work/gcroots/
+# (a .drv root keeps the .drv files it depends on too). run-tests.sh calls this again for missing roots.
+root_drv() {
+  mkdir -p "$work/gcroots"
+  nix-instantiate --add-root "$work/gcroots/$1.drv" --expr \
+    "(builtins.getFlake \"path:$work/$1\").nixosConfigurations.testhost.config.system.build.nixedErrorCase" \
+    >/dev/null 2>&1 || echo "note: couldn't GC-root $1's .drv"
+}
+export -f root_drv
 
 if [ $# -gt 0 ]; then cases=("$@"); else cases=($(cd "$here/cases" && ls *.nix | sed 's/\.nix$//')); fi
 printf '%s\n' "${cases[@]}" | xargs -P 4 -I{} bash -c 'one {}'
