@@ -13,6 +13,7 @@ use and shared here in case they're useful to anyone else:
 - **[`photo2scan`](./photo2scan)** — turns phone photos of paper pages into a scanned-looking PDF: finds the page, undoes the camera angle, evens out the lighting. Handy for forms someone photographed at an angle and sent you. Also a [web page](https://danieltallon.github.io/nix-packages/photo2scan/) that works on Windows, Linux and phones with nothing to install, and also takes existing PDFs and Word files. See [photo2scan](#photo2scan) below. Own project, MIT licensed.
 - **[`nti`](./nti)** — Nix Temporary Install: try out programs from nixpkgs without a full system rebuild. They're kept in a plain list file you can see and edit by hand, and they are installed to your Nix user profile. When you take them off the list, they are gone from your profile. This works on NixOS and on other distros with Nix. See [nti](#nti) below. This is my own project, covered by the MIT licensed.
 - **[`brave-origin`](./brave-origin)** — [Brave Origin](https://brave.com/origin/), Brave with Rewards, Wallet, VPN, AI, News and telemetry taken out (free on Linux). Repackaged from the `.deb` in Brave's apt repo, adapted from the nixpkgs package removed in November 2026. A [scheduled workflow](./.github/workflows/update-brave-origin.yml) checks for a new release twice a day, builds it, and commits the bump. Policies go in `/etc/brave/policies/managed/`. x86_64-linux and aarch64-linux. MPL-2.0.
+- **[`plymouth-nixos-chase`](#plymouth-nixos-chase)** — a Plymouth boot splash: the official NixOS logo with a light chasing around the snowflake's six lambdas, one lit at a time. `plymouth-nixos-chase-glitch` adds short cyberpunk glitch bursts. Both also come as video files (1080p, lossless, and Steam Deck startup movie). See [plymouth-nixos-chase](#plymouth-nixos-chase) below. Scripts MIT; logo artwork CC BY 4.0 (NixOS branding).
 
 Each package is exposed on its own — installing or building one never pulls in the others.
 
@@ -318,6 +319,12 @@ nix-packages/
 │   └── home-template/              # templates.wallpaperpicker-home
 │       ├── flake.nix
 │       └── home.nix
+├── plymouth-nixos-chase/
+│   ├── package.nix                 # the theme; .videos renders it as video
+│   ├── logo-chase.py               # writes the chase frames from the logo SVG
+│   ├── logo-glitch.py              # adds the glitch bursts
+│   ├── nixos-chase.script          # Plymouth script: frame loop and prompts
+│   └── LICENSE-MIT                 # for the script's Muddyblack origin
 ├── flow-desktop/
 │   ├── flow-desktop.nix
 │   ├── flow-desktop-storyboard-preview.patch
@@ -561,6 +568,83 @@ flattens shadows so the paper comes out white. Pages are fitted to US Letter.
 
 It corrects camera angle, not paper that is curled or folded. A white page on a
 white table may not be found; then it says so and uses the whole photo.
+
+## plymouth-nixos-chase
+
+A boot splash of the official NixOS logo (snowflake and "NixOS" text) on black. A light runs clockwise around
+the snowflake: one lambda at full brightness with a short trail fading behind it, the rest dimmed.
+`plymouth-nixos-chase-glitch` is the same chase, with a short glitch burst once per loop
+(torn slices, a red/cyan split, scanlines and neon blocks).
+
+The frames are made when the package builds, straight from the logo's SVG, so the whole theme is under 1 MB
+(24 frames; 48 with the glitch). Your password prompt for an encrypted disk, and "Booting…"/"Shutting down…"
+in the corner, still show.
+
+### NixOS
+
+Add this repo as a flake input:
+
+```nix
+inputs.nix-packages.url = "github:DanielTallon/nix-packages";
+```
+
+then, in a NixOS module that gets `inputs` (or however you pass flake inputs to your modules):
+
+```nix
+{ inputs, pkgs, ... }:
+{
+  boot.plymouth = {
+    enable = true;
+    theme = "nixos-chase";  # or "nixos-chase-glitch"
+    themePackages = [ inputs.nix-packages.packages.${pkgs.stdenv.hostPlatform.system}.plymouth-nixos-chase ];
+    # glitch version: ….plymouth-nixos-chase-glitch
+  };
+  # A quiet boot, so the splash isn't covered by kernel messages:
+  boot.kernelParams = [ "quiet" "splash" ];
+  boot.consoleLogLevel = 0;
+}
+```
+
+Rebuild and reboot. Change the look with `.override { settings = { … }; }`, for example
+`(….plymouth-nixos-chase.override { settings = { height = 300; ticks = 3; }; })`.
+`settings` replaces the package's own, so to tweak the glitch version, include `glitch = 2;` too:
+
+| Setting | Default | What it does |
+|---|---|---|
+| `height` | `400` | Logo height in pixels, drawn at that size (400 is ~37% of a 1080p screen) |
+| `ticks` | `4` | Speed: Plymouth refreshes (50 per second) per frame. Lower is faster |
+| `steps` | `4` | Smoothness: frames for the light to move one lambda |
+| `trail` | `2` | How many lambdas behind the lit one still glow |
+| `dim` | `0.3` | Brightness of an unlit lambda, 0 to 1 |
+| `glitch` | `0` | `0` = no glitch; `N` = loop N turns of the chase with one glitch burst |
+
+### Videos and the Steam Deck
+
+The same animation as video files, smoother than the splash (30 fps):
+
+```sh
+nix build github:DanielTallon/nix-packages#plymouth-nixos-chase.videos
+nix build github:DanielTallon/nix-packages#plymouth-nixos-chase-glitch.videos
+```
+
+`result/` then holds `*-1080p.mp4`, `*-1080p-lossless.webm` (no quality lost) and `*-steamdeck.webm`
+(1280x800). For a Steam Deck startup movie, copy the `-steamdeck.webm` file in Desktop Mode to
+`~/.steam/root/config/uioverrides/movies/` (create the folder if needed), then choose it in Steam's
+Settings → Customization → Startup Movie.
+
+### Credits
+
+"NixOS Logo" by [Simon Frankau](https://github.com/simon-frankau),
+[Tim Cuthbertson](https://github.com/timbertson),
+and [Daniel Baker](https://github.com/djacu)
+(maintained by the [NixOS Marketing Team](https://nixos.org/community/teams/marketing/)),
+from [nixos/branding](https://github.com/NixOS/branding),
+licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+Changes: the lambdas' brightness is animated, and the glitch version distorts some frames.
+The logo itself is not altered.
+
+The frame-loop and password-prompt script is adapted from [Muddyblack/NixOS](https://github.com/Muddyblack/NixOS)
+(MIT, Copyright (c) 2026 Muddyblack; see [`plymouth-nixos-chase/LICENSE-MIT`](plymouth-nixos-chase/LICENSE-MIT)).
 
 ## License
 
