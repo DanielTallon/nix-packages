@@ -22,6 +22,7 @@ import sys
 import textwrap
 import threading
 import time
+import urllib.parse
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1004,6 +1005,102 @@ def h_unknown_name(rep: Report, vars: dict, flake: Flake, rules, text: str) -> N
                         "`let ... in` / function argument.")
         vars["fix_text"] = (f"Change it to `pkgs.{close[0]}`, if that's what you meant." if close else
                             f"Check the spelling of `{name}`. If it's a package, write `pkgs.{name}`.")
+
+
+def locked_input(flake: Flake, label: str) -> dict:
+    """flake.lock's `locked` entry of a top-level input ({} if there's none)."""
+    try:
+        lock = json.loads((flake.dir / "flake.lock").read_text()) if flake.dir else {}
+        nodes = lock["nodes"]
+        key = nodes[lock.get("root", "root")]["inputs"][label]
+        return nodes[key]["locked"] if isinstance(key, str) else {}
+    except (OSError, ValueError, KeyError, TypeError):
+        return {}
+
+
+def input_attr_names(flake: Flake, label: str, path: list[str]) -> list[str]:
+    """Names under `inputs.<label>.<path…>` (a `${…}` part is taken as this machine's system), read
+    offline from the locked copy already in the store."""
+    # `nix flake archive --dry-run` names store paths without fetching them, so the path may not exist; the
+    # locked reference from flake.lock is then found in Nix's fetcher cache (offline).
+    src = flake.inputs.get(label)
+    locked = locked_input(flake, label)
+    kind = locked.get("type")
+    if src and Path(src).exists():
+        ref = f"path:{src}"
+    elif kind in ("github", "gitlab", "sourcehut") and locked.get("rev"):
+        ref = f"{kind}:{locked['owner']}/{locked['repo']}/{locked['rev']}"
+    elif kind == "tarball" and locked.get("url"):  # e.g. nixpkgs from the channel registry
+        ref = f"tarball+{locked['url']}"
+    elif kind == "git" and locked.get("url") and locked.get("rev"):
+        ref = f"git+{locked['url']}{'&' if '?' in locked['url'] else '?'}rev={locked['rev']}"
+    else:
+        return []
+    if locked.get("narHash") and not ref.startswith("path:"):
+        ref += f"{'&' if '?' in ref else '?'}narHash={urllib.parse.quote(locked['narHash'], safe='')}"
+    sel = "".join(f".{json.dumps(p)}" if p != "${}" else ".${builtins.currentSystem}" for p in path)
+    expr = f'builtins.attrNames (builtins.getFlake "{ref}").outputs{sel}'
+    try:
+        out = run(["nix", "--extra-experimental-features", "nix-command flakes", "eval", "--impure", "--offline",
+                   "--json", "--expr", expr], timeout=60)
+        return json.loads(out.stdout) if out.returncode == 0 else []
+    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
+        return []
+
+
+def h_missing_attr(rep: Report, vars: dict, flake: Flake, rules, text: str) -> None:
+    """`attribute 'x' missing`. When x is looked up in a flake input (`inputs.foo.packages.${system}.x`,
+    or a variable set to such a path), the usual cause is a flake.lock that pins that input from before x
+    was added (pushed to the input's repo, but the lock not updated), or a typo. Else the nixpkgs advice."""
+    name = vars.get("name", "")
+    vars["explain_text"] = (f"Something tried to use `{name}`, but it doesn't exist there. If it's a package: it's "
+                            "misspelled, it was renamed or removed in your version of nixpkgs, or it lives under a "
+                            f"sub-set (like `pkgs.kdePackages.{name}`).")
+    vars["fix_text"] = (f"Check the spelling. Search for the right name with `nix search nixpkgs {name}` or on "
+                        "search.nixos.org.")
+    if not (rep.loc and rep.loc.line):
+        return
+    lines = read_lines(rep.loc.origin.real)
+    line = lines[rep.loc.line - 1].split("#")[0] if rep.loc.line <= len(lines) else ""
+    # The path the name is read from, on Nix's line: `a.b.${c}.name`
+    m = re.search(rf"((?:[\w'-]+|\$\{{[^}}]*\}})(?:\.(?:[\w'-]+|\$\{{[^}}]*\}}))*)\.{re.escape(name)}\b", line)
+    if not m:
+        return
+    parts = [("${}" if p.startswith("${") else p) for p in re.findall(r"\$\{[^}]*\}|[\w'-]+", m[1])]
+    # A variable (`nixPackages`): follow it to `nixPackages = inputs.….;` in the same file
+    if parts[0] != "inputs":
+        for l in lines:
+            if d := re.match(rf"\s*{re.escape(parts[0])}\s*=\s*(inputs(?:\.(?:[\w'-]+|\$\{{[^}}]*\}}))+)\s*;",
+                             l.split("#")[0]):
+                parts = [("${}" if p.startswith("${") else p)
+                         for p in re.findall(r"\$\{[^}]*\}|[\w'-]+", d[1])] + parts[1:]
+                break
+    if parts[0] != "inputs" or len(parts) < 2:
+        return
+    label, path = parts[1], parts[2:]
+    locked = locked_input(flake, label)
+    if not locked:
+        return
+    rev = (locked.get("rev") or "")[:7]
+    when = time.strftime("%Y-%m-%d", time.localtime(locked["lastModified"])) if locked.get("lastModified") else ""
+    pinned = (f"commit {rev}" if rev else "the version in flake.lock") + (f", from {when}" if when else "")
+    where = ".".join(["inputs", label, *[p if p != "${}" else "${system}" for p in path]])
+    rep.title = f"`{name}` isn't in your locked {label}"
+    rep.blame = "you"
+    close = difflib.get_close_matches(name, input_attr_names(flake, label, path), n=4, cutoff=0.7)
+    if close:
+        rep.suggest = ", ".join(f"`{c}`" for c in close)
+    vars["explain_text"] = (
+        f"`{name}` is read from the flake input `{label}` ({where}), and the copy of {label} your flake.lock "
+        f"pins ({pinned}) has no `{name}`.\n\n"
+        f"If you added `{name}` to {label} yourself, or it's new upstream, your flake.lock is older than that "
+        f"change: pushing it isn't enough, the lock has to move to the new commit too. Otherwise it's a typo"
+        + (f" (close names that exist: {rep.suggest})." if close else "."))
+    vars["fix_text"] = (
+        f"Update just that input, then rebuild:\n    nix flake update {label}"
+        + (f"\n\nIf {label} is your own repo, push the change first: the update only fetches what's on "
+           f"{locked.get('owner', '')}/{locked.get('repo', '')}." if locked.get("type") == "github" else "")
+        + (f"\n\nOr, if you meant `{close[0]}`: change line {rep.loc.line} to use it." if close else ""))
 
 
 def h_module_arg(rep: Report, vars: dict, flake: Flake, rules, text: str) -> None:
@@ -2183,6 +2280,7 @@ HANDLERS = {
     "equals_inside": h_equals_inside,
     "bare_word": h_bare_word,
     "unknown_name": h_unknown_name,
+    "missing_attr": h_missing_attr,
     "removed_pkg": h_removed_pkg,
     "missing_module": h_missing_module,
     "hm_file": h_hm_file,

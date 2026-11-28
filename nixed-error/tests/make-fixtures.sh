@@ -53,9 +53,10 @@ EOF
   cat > "$dir/flake.nix" <<'EOF'
 {
   inputs.nixpkgs.url = "nixpkgs";
-  outputs = { nixpkgs, ... }: {
+  outputs = inputs@{ nixpkgs, ... }: {
     nixosConfigurations.testhost = nixpkgs.lib.nixosSystem {
       system = "x86_64-linux";
+      specialArgs = { inherit inputs; };
       modules = [ ./hosts/base.nix ./hosts/case.nix ];
     };
   };

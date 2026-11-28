@@ -189,11 +189,11 @@ id = "attribute-missing"
 title = "Name not found"
 match = '''attribute '(?P<name>[^']+)' missing'''
 priority = 70
-explain = """
-Something tried to use `{{name}}`, but it doesn't exist there. If it's a package: it's misspelled, it was
-renamed or removed in your version of nixpkgs, or it lives under a sub-set (like `pkgs.kdePackages.{{name}}`).
-"""
-fix = "Check the spelling. Search for the right name with `nix search nixpkgs {{name}}` or on search.nixos.org."
+# The handler writes the texts: the nixpkgs advice, or, when the name is read from a flake input
+# (`inputs.x.packages.${system}.name`, or a variable set to that), an out-of-date flake.lock or a typo.
+handler = "missing_attr"
+explain = "{{explain_text}}"
+fix = "{{fix_text}}"
 
 [[rule]]
 id = "missing-module"
