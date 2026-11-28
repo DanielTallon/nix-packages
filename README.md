@@ -605,9 +605,39 @@ then, in a NixOS module that gets `inputs` (or however you pass flake inputs to 
 }
 ```
 
-Rebuild and reboot. Change the look with `.override { settings = { … }; }`, for example
-`(….plymouth-nixos-chase.override { settings = { height = 300; ticks = 3; }; })`.
-`settings` replaces the package's own, so to tweak the glitch version, include `glitch = 2;` too:
+Rebuild and reboot. Change the look with `.override { settings = { … }; }`. For example, the logo is
+400 pixels tall by default, which suits a 1080p screen. For a 1440p screen, 530 gives it the same share of
+the screen (800 for 4K):
+
+```nix
+{ inputs, pkgs, ... }:
+let
+  nixPackages = inputs.nix-packages.packages.${pkgs.stdenv.hostPlatform.system};
+in
+{
+  boot.plymouth = {
+    enable = true;
+    theme = "nixos-chase";
+    themePackages = [
+      (nixPackages.plymouth-nixos-chase.override {
+        settings = { height = 530; };
+      })
+    ];
+  };
+}
+```
+
+`settings` replaces the package's own, so for the glitch version, include `glitch = 2;` too
+(and keep `theme = "nixos-chase-glitch";`):
+
+```nix
+      (nixPackages.plymouth-nixos-chase-glitch.override {
+        settings = { glitch = 2; height = 530; };
+      })
+```
+
+The frames are made on your machine with your settings, so an override builds locally instead of
+coming from the binary cache (it takes a few seconds). Every setting:
 
 | Setting | Default | What it does |
 |---|---|---|
